@@ -154,6 +154,20 @@ class NativeBridge(
                 }.start()
             }
 
+            "getStorageInfo" -> {
+                try {
+                    val cacheDir = java.io.File(context.cacheDir, "clone_work")
+                    val cacheSize = if (cacheDir.exists()) getDirSize(cacheDir) else 0L
+                    val info = mapOf(
+                        "cacheSizeBytes" to cacheSize,
+                        "cacheSizeFormatted" to formatSize(cacheSize)
+                    )
+                    result.success(info)
+                } catch (e: Exception) {
+                    result.error("STORAGE_ERROR", e.message, null)
+                }
+            }
+
             else -> result.notImplemented()
         }
     }
@@ -161,16 +175,6 @@ class NativeBridge(
     /**
      * Perform the full clone operation.
      * Handles both single and split APK apps.
-     *
-     * Flow for single APK:
-     *   Extract → Modify base → Sign → Install
-     *
-     * Flow for split APK:
-     *   Extract all splits → Merge into single APK → Modify → Sign → Install
-     *   OR
-     *   Extract all splits → Modify base only → Sign base → Install all via session
-     *
-     * We use the merge approach for better compatibility.
      */
     private fun performClone(
         packageName: String,
@@ -245,6 +249,22 @@ class NativeBridge(
                 "status" to status,
                 "progress" to progress
             ))
+        }
+    }
+
+    private fun getDirSize(dir: java.io.File): Long {
+        var size = 0L
+        dir.listFiles()?.forEach { file ->
+            size += if (file.isDirectory) getDirSize(file) else file.length()
+        }
+        return size
+    }
+
+    private fun formatSize(bytes: Long): String {
+        return when {
+            bytes < 1024 -> "$bytes B"
+            bytes < 1024 * 1024 -> "${bytes / 1024} KB"
+            else -> "${"%.1f".format(bytes / (1024.0 * 1024.0))} MB"
         }
     }
 }

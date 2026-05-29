@@ -21,6 +21,7 @@ class AppConstants {
   static const String methodCanInstallPackages = 'canInstallPackages';
   static const String methodRequestInstallPermission = 'requestInstallPermission';
   static const String methodCleanupCache = 'cleanupCache';
+  static const String methodGetStorageInfo = 'getStorageInfo';
 
   // Clone status
   static const String statusExtracting = 'extracting';

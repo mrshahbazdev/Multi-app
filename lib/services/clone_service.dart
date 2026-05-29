@@ -78,8 +78,19 @@ class CloneService {
     return await NativeBridge.isAppInstalled(clone.clonePackage);
   }
 
-  /// Clean up cache
+  /// Clean up cache files
   static Future<void> cleanupCache() async {
     await NativeBridge.cleanupCache();
+  }
+
+  /// Delete all clones
+  static Future<void> deleteAllClones() async {
+    final clones = getAllClones();
+    for (final clone in clones) {
+      try {
+        await NativeBridge.uninstallApp(clone.clonePackage);
+      } catch (_) {}
+      await clone.delete();
+    }
   }
 }

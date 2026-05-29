@@ -17,7 +17,7 @@ class CloneTile extends StatelessWidget {
           padding: const EdgeInsets.all(12),
           child: Row(
             children: [
-              // Clone icon
+              // Clone icon with gradient
               Container(
                 width: 48,
                 height: 48,
@@ -30,7 +30,37 @@ class CloneTile extends StatelessWidget {
                     ],
                   ),
                 ),
-                child: const Icon(Icons.copy_all, color: Colors.white70),
+                child: Stack(
+                  children: [
+                    const Center(
+                      child: Icon(Icons.copy_all, color: Colors.white70),
+                    ),
+                    // Clone index badge
+                    Positioned(
+                      right: 0,
+                      bottom: 0,
+                      child: Container(
+                        width: 18,
+                        height: 18,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: Theme.of(context).colorScheme.primary,
+                          border: Border.all(color: const Color(0xFF1A1A2E), width: 1.5),
+                        ),
+                        child: Center(
+                          child: Text(
+                            '${clone.cloneIndex}',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 9,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
               const SizedBox(width: 12),
 
@@ -77,6 +107,12 @@ class CloneTile extends StatelessWidget {
                         ],
                       ],
                     ),
+                    const SizedBox(height: 4),
+                    // Time ago
+                    Text(
+                      _timeAgo(clone.createdAt),
+                      style: const TextStyle(fontSize: 10, color: Colors.white24),
+                    ),
                   ],
                 ),
               ),
@@ -86,8 +122,33 @@ class CloneTile extends StatelessWidget {
                 icon: const Icon(Icons.more_vert, color: Colors.white38),
                 onSelected: (val) => _handleAction(context, val),
                 itemBuilder: (_) => [
-                  const PopupMenuItem(value: 'launch', child: Text('Launch')),
-                  const PopupMenuItem(value: 'delete', child: Text('Delete')),
+                  const PopupMenuItem(
+                    value: 'launch',
+                    child: ListTile(
+                      leading: Icon(Icons.launch, size: 20),
+                      title: Text('Launch'),
+                      contentPadding: EdgeInsets.zero,
+                      dense: true,
+                    ),
+                  ),
+                  const PopupMenuItem(
+                    value: 'info',
+                    child: ListTile(
+                      leading: Icon(Icons.info_outline, size: 20),
+                      title: Text('App Info'),
+                      contentPadding: EdgeInsets.zero,
+                      dense: true,
+                    ),
+                  ),
+                  const PopupMenuItem(
+                    value: 'delete',
+                    child: ListTile(
+                      leading: Icon(Icons.delete, size: 20, color: Colors.red),
+                      title: Text('Delete', style: TextStyle(color: Colors.red)),
+                      contentPadding: EdgeInsets.zero,
+                      dense: true,
+                    ),
+                  ),
                 ],
               ),
             ],
@@ -95,6 +156,15 @@ class CloneTile extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  String _timeAgo(DateTime date) {
+    final diff = DateTime.now().difference(date);
+    if (diff.inMinutes < 1) return 'Just now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return '${diff.inHours}h ago';
+    if (diff.inDays < 7) return '${diff.inDays}d ago';
+    return '${date.day}/${date.month}/${date.year}';
   }
 
   void _launchClone(BuildContext context) async {
@@ -119,6 +189,9 @@ class CloneTile extends StatelessWidget {
       case 'launch':
         _launchClone(context);
         break;
+      case 'info':
+        _showCloneInfo(context);
+        break;
       case 'delete':
         final confirmed = await showDialog<bool>(
           context: context,
@@ -142,5 +215,58 @@ class CloneTile extends StatelessWidget {
         }
         break;
     }
+  }
+
+  void _showCloneInfo(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(clone.displayName),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _infoRow('Original App', clone.originalAppName),
+            _infoRow('Original Package', clone.originalPackage),
+            _infoRow('Clone Package', clone.clonePackage),
+            _infoRow('Clone Index', '#${clone.cloneIndex}'),
+            _infoRow('Version', clone.originalVersionName),
+            _infoRow('Created', clone.createdAt.toString().substring(0, 16)),
+            if (clone.isSplitApk)
+              _infoRow('Split APK', '${clone.splitCount} splits'),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _infoRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 100,
+            child: Text(
+              label,
+              style: const TextStyle(fontSize: 12, color: Colors.white54),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: const TextStyle(fontSize: 12),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
