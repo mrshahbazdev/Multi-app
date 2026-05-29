@@ -52,9 +52,30 @@ class CloneTile extends StatelessWidget {
                       style: const TextStyle(fontSize: 12, color: Colors.white54),
                     ),
                     const SizedBox(height: 2),
-                    Text(
-                      clone.clonePackage,
-                      style: const TextStyle(fontSize: 10, color: Colors.white38),
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            clone.clonePackage,
+                            style: const TextStyle(fontSize: 10, color: Colors.white38),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (clone.isSplitApk) ...[
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(4),
+                              color: Colors.orange.withOpacity(0.15),
+                            ),
+                            child: Text(
+                              'Split (${clone.splitCount})',
+                              style: const TextStyle(fontSize: 9, color: Colors.orange),
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                   ],
                 ),

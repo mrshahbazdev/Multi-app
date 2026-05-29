@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:app_cloner/models/app_info.dart';
 import 'package:app_cloner/providers/clone_provider.dart';
 import 'package:app_cloner/services/clone_service.dart';
+import 'package:app_cloner/services/native_bridge.dart';
 import 'package:app_cloner/ui/screens/cloning_progress_screen.dart';
 
 class CloneConfigScreen extends ConsumerStatefulWidget {
@@ -17,6 +18,8 @@ class CloneConfigScreen extends ConsumerStatefulWidget {
 class _CloneConfigScreenState extends ConsumerState<CloneConfigScreen> {
   late TextEditingController _nameController;
   late int _cloneIndex;
+  SplitApkDetails? _splitDetails;
+  bool _loadingSplitInfo = false;
 
   @override
   void initState() {
@@ -25,6 +28,26 @@ class _CloneConfigScreenState extends ConsumerState<CloneConfigScreen> {
     _nameController = TextEditingController(
       text: '${widget.appInfo.appName} Clone $_cloneIndex',
     );
+    if (widget.appInfo.hasSplitApks) {
+      _loadSplitInfo();
+    }
+  }
+
+  Future<void> _loadSplitInfo() async {
+    setState(() => _loadingSplitInfo = true);
+    try {
+      final details = await NativeBridge.getSplitInfo(widget.appInfo.packageName);
+      if (mounted) {
+        setState(() {
+          _splitDetails = details;
+          _loadingSplitInfo = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _loadingSplitInfo = false);
+      }
+    }
   }
 
   @override
@@ -50,7 +73,6 @@ class _CloneConfigScreenState extends ConsumerState<CloneConfigScreen> {
                 padding: const EdgeInsets.all(16),
                 child: Row(
                   children: [
-                    // App icon
                     Container(
                       width: 64,
                       height: 64,
@@ -72,18 +94,12 @@ class _CloneConfigScreenState extends ConsumerState<CloneConfigScreen> {
                         children: [
                           Text(
                             widget.appInfo.appName,
-                            style: const TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w600,
-                            ),
+                            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
                           ),
                           const SizedBox(height: 4),
                           Text(
                             widget.appInfo.packageName,
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: Colors.white38,
-                            ),
+                            style: const TextStyle(fontSize: 12, color: Colors.white38),
                           ),
                           const SizedBox(height: 4),
                           Row(
@@ -104,17 +120,19 @@ class _CloneConfigScreenState extends ConsumerState<CloneConfigScreen> {
                 ),
               ),
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 16),
+
+            // Split APK Details Card
+            if (widget.appInfo.hasSplitApks) ...[
+              _buildSplitDetailsCard(),
+              const SizedBox(height: 16),
+            ],
 
             // Existing clones
             if (existingClones.isNotEmpty) ...[
               Text(
                 'Existing Clones (${existingClones.length})',
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.white54,
-                ),
+                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.white54),
               ),
               const SizedBox(height: 8),
               ...existingClones.map((c) => Card(
@@ -130,24 +148,18 @@ class _CloneConfigScreenState extends ConsumerState<CloneConfigScreen> {
                       ),
                     ),
                   )),
-              const SizedBox(height: 24),
+              const SizedBox(height: 16),
             ],
 
             // Clone name
             const Text(
               'Clone Name',
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-                color: Colors.white54,
-              ),
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.white54),
             ),
             const SizedBox(height: 8),
             TextField(
               controller: _nameController,
-              decoration: const InputDecoration(
-                hintText: 'Enter clone name',
-              ),
+              decoration: const InputDecoration(hintText: 'Enter clone name'),
             ),
             const SizedBox(height: 32),
 
@@ -160,27 +172,145 @@ class _CloneConfigScreenState extends ConsumerState<CloneConfigScreen> {
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Theme.of(context).colorScheme.primary,
                   foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                  ),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                 ),
-                child: const Row(
+                child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(Icons.copy_all),
-                    SizedBox(width: 8),
+                    const Icon(Icons.copy_all),
+                    const SizedBox(width: 8),
                     Text(
-                      'Start Cloning',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                      widget.appInfo.hasSplitApks ? 'Clone (Split APK)' : 'Start Cloning',
+                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
                     ),
                   ],
                 ),
               ),
             ),
+
+            if (widget.appInfo.hasSplitApks) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(12),
+                  color: Colors.orange.withOpacity(0.1),
+                  border: Border.all(color: Colors.orange.withOpacity(0.3)),
+                ),
+                child: const Row(
+                  children: [
+                    Icon(Icons.info_outline, color: Colors.orange, size: 20),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'This app uses Split APKs (App Bundle). All splits will be merged before cloning. This may take longer for large apps.',
+                        style: TextStyle(fontSize: 12, color: Colors.orange),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ],
         ),
       ),
     );
+  }
+
+  Widget _buildSplitDetailsCard() {
+    if (_loadingSplitInfo) {
+      return const Card(
+        child: Padding(
+          padding: EdgeInsets.all(16),
+          child: Center(
+            child: SizedBox(
+              width: 24,
+              height: 24,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          ),
+        ),
+      );
+    }
+
+    if (_splitDetails == null) return const SizedBox.shrink();
+
+    final details = _splitDetails!;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.extension, color: Colors.orange, size: 20),
+                const SizedBox(width: 8),
+                Text(
+                  'Split APK Details (${details.splitCount} splits)',
+                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                ),
+                const Spacer(),
+                Text(
+                  details.totalSizeFormatted,
+                  style: const TextStyle(fontSize: 12, color: Colors.white54),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            const Divider(height: 1, color: Colors.white12),
+            const SizedBox(height: 8),
+            ...details.splits.map((split) => Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Row(
+                    children: [
+                      Icon(
+                        _splitTypeIcon(split.type),
+                        size: 16,
+                        color: _splitTypeColor(split.type),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          split.fileName,
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                      ),
+                      _infoChip(split.type, color: _splitTypeColor(split.type)),
+                      const SizedBox(width: 8),
+                      Text(
+                        split.sizeFormatted,
+                        style: const TextStyle(fontSize: 11, color: Colors.white38),
+                      ),
+                    ],
+                  ),
+                )),
+          ],
+        ),
+      ),
+    );
+  }
+
+  IconData _splitTypeIcon(String type) {
+    switch (type) {
+      case 'BASE': return Icons.apps;
+      case 'ABI': return Icons.memory;
+      case 'DENSITY': return Icons.photo_size_select_large;
+      case 'LOCALE': return Icons.language;
+      case 'FEATURE': return Icons.extension;
+      default: return Icons.help_outline;
+    }
+  }
+
+  Color _splitTypeColor(String type) {
+    switch (type) {
+      case 'BASE': return Colors.blue;
+      case 'ABI': return Colors.green;
+      case 'DENSITY': return Colors.purple;
+      case 'LOCALE': return Colors.teal;
+      case 'FEATURE': return Colors.amber;
+      default: return Colors.grey;
+    }
   }
 
   Widget _infoChip(String label, {Color? color}) {

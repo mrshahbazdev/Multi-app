@@ -1,6 +1,9 @@
 package com.appcloner.app
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
@@ -14,12 +17,19 @@ class NativeBridge(
     flutterEngine: FlutterEngine
 ) : MethodChannel.MethodCallHandler {
 
+    companion object {
+        const val CHANNEL_NAME = "com.appcloner/native"
+        private const val TAG = "NativeBridge"
+    }
+
     private val channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL_NAME)
+    private val mainHandler = Handler(Looper.getMainLooper())
     private val appScanner = AppScanner(context)
     private val apkExtractor = ApkExtractor(context)
     private val apkModifier = ApkModifier(context)
     private val apkSigner = ApkSigner(context)
     private val cloneInstaller = CloneInstaller(context)
+    private val splitHandler = SplitApkHandler(context)
 
     init {
         channel.setMethodCallHandler(this)
@@ -32,9 +42,10 @@ class NativeBridge(
                 Thread {
                     try {
                         val apps = appScanner.getInstalledApps(includeSystem)
-                        result.success(apps)
+                        mainHandler.post { result.success(apps) }
                     } catch (e: Exception) {
-                        result.error("SCAN_ERROR", e.message, null)
+                        Log.e(TAG, "Failed to scan apps", e)
+                        mainHandler.post { result.error("SCAN_ERROR", e.message, null) }
                     }
                 }.start()
             }
@@ -49,6 +60,18 @@ class NativeBridge(
                 }
             }
 
+            "getSplitInfo" -> {
+                val packageName = call.argument<String>("packageName") ?: ""
+                Thread {
+                    try {
+                        val info = splitHandler.getSplitSummary(packageName)
+                        mainHandler.post { result.success(info) }
+                    } catch (e: Exception) {
+                        mainHandler.post { result.error("SPLIT_INFO_ERROR", e.message, null) }
+                    }
+                }.start()
+            }
+
             "cloneApp" -> {
                 val packageName = call.argument<String>("packageName") ?: ""
                 val cloneName = call.argument<String>("cloneName") ?: ""
@@ -56,32 +79,11 @@ class NativeBridge(
 
                 Thread {
                     try {
-                        // Step 1: Extract APK
-                        sendProgress("Extracting APK...", 0.15)
-                        val apkPath = apkExtractor.extractApk(packageName)
-
-                        // Step 2: Modify package name
-                        sendProgress("Modifying package...", 0.40)
-                        val clonePackage = "com.clone$cloneIndex.${packageName.replace(".", "_")}"
-                        val modifiedApk = apkModifier.modifyApk(
-                            apkPath = apkPath,
-                            originalPackage = packageName,
-                            newPackage = clonePackage,
-                            newAppName = cloneName
-                        )
-
-                        // Step 3: Sign APK
-                        sendProgress("Signing APK...", 0.70)
-                        val signedApk = apkSigner.signApk(modifiedApk)
-
-                        // Step 4: Install
-                        sendProgress("Installing clone...", 0.90)
-                        cloneInstaller.installApk(signedApk)
-
-                        sendProgress("Complete!", 1.0)
-                        result.success(clonePackage)
+                        val clonePackage = performClone(packageName, cloneName, cloneIndex)
+                        mainHandler.post { result.success(clonePackage) }
                     } catch (e: Exception) {
-                        result.error("CLONE_ERROR", e.message, null)
+                        Log.e(TAG, "Clone failed for $packageName", e)
+                        mainHandler.post { result.error("CLONE_ERROR", e.message, e.stackTraceToString()) }
                     }
                 }.start()
             }
@@ -131,18 +133,118 @@ class NativeBridge(
                 }
             }
 
+            "canInstallPackages" -> {
+                result.success(cloneInstaller.canInstallPackages())
+            }
+
+            "requestInstallPermission" -> {
+                cloneInstaller.requestInstallPermission()
+                result.success(true)
+            }
+
+            "cleanupCache" -> {
+                Thread {
+                    try {
+                        apkExtractor.cleanupAll()
+                        cloneInstaller.cleanupSessions()
+                        mainHandler.post { result.success(true) }
+                    } catch (e: Exception) {
+                        mainHandler.post { result.error("CLEANUP_ERROR", e.message, null) }
+                    }
+                }.start()
+            }
+
             else -> result.notImplemented()
         }
     }
 
-    private fun sendProgress(status: String, progress: Double) {
-        channel.invokeMethod("onCloneProgress", mapOf(
-            "status" to status,
-            "progress" to progress
-        ))
+    /**
+     * Perform the full clone operation.
+     * Handles both single and split APK apps.
+     *
+     * Flow for single APK:
+     *   Extract → Modify base → Sign → Install
+     *
+     * Flow for split APK:
+     *   Extract all splits → Merge into single APK → Modify → Sign → Install
+     *   OR
+     *   Extract all splits → Modify base only → Sign base → Install all via session
+     *
+     * We use the merge approach for better compatibility.
+     */
+    private fun performClone(
+        packageName: String,
+        cloneName: String,
+        cloneIndex: Int
+    ): String {
+        val clonePackage = "com.clone$cloneIndex.${packageName.replace(".", "_")}"
+        val isSplit = splitHandler.isSplitApk(packageName)
+
+        Log.d(TAG, "Cloning $packageName -> $clonePackage (split=$isSplit)")
+
+        // Step 1: Extract
+        sendProgress("Extracting APK${if (isSplit) "s" else ""}...", 0.05)
+        val extraction = apkExtractor.extract(packageName) { status, progress ->
+            sendProgress(status, 0.05 + progress * 0.20)
+        }
+
+        val apkToModify: String
+
+        if (isSplit) {
+            // Step 1.5: Merge split APKs into a single APK
+            val splitCount = extraction.splitPaths.values.sumOf { it.size }
+            sendProgress("Merging $splitCount split APKs...", 0.25)
+
+            val mergedPath = "${apkExtractor.getWorkDir()}/$packageName/merged.apk"
+            apkToModify = splitHandler.mergeSplitsToSingle(
+                extraction.splitPaths,
+                mergedPath
+            ) { status, progress ->
+                sendProgress(status, 0.25 + progress * 0.15)
+            }
+
+            Log.d(TAG, "Merged ${splitCount} splits into single APK: $apkToModify")
+        } else {
+            apkToModify = extraction.basePath
+        }
+
+        // Step 2: Modify package name
+        sendProgress("Modifying package name...", 0.45)
+        val modifiedApk = apkModifier.modifyApk(
+            apkPath = apkToModify,
+            originalPackage = packageName,
+            newPackage = clonePackage,
+            newAppName = cloneName
+        )
+        Log.d(TAG, "Modified APK: $modifiedApk")
+
+        // Step 3: Sign
+        sendProgress("Signing APK...", 0.65)
+        val signedApk = apkSigner.signApk(modifiedApk)
+        Log.d(TAG, "Signed APK: $signedApk")
+
+        // Step 4: Install
+        sendProgress("Installing clone...", 0.85)
+        cloneInstaller.installApk(signedApk)
+
+        sendProgress("Waiting for install confirmation...", 0.95)
+
+        // Cleanup temp files
+        Thread {
+            Thread.sleep(5000)
+            apkExtractor.cleanup(packageName)
+        }.start()
+
+        return clonePackage
     }
 
-    companion object {
-        const val CHANNEL_NAME = "com.appcloner/native"
+    private fun sendProgress(status: String, progress: Double) {
+        Log.d(TAG, "Progress: $status (${"%.0f".format(progress * 100)}%)")
+        mainHandler.post {
+            channel.invokeMethod("onCloneProgress", mapOf(
+                "status" to status,
+                "progress" to progress
+            ))
+        }
     }
 }

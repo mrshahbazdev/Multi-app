@@ -13,19 +13,39 @@ final installedAppsProvider = FutureProvider<List<AppInfo>>((ref) async {
 // Toggle for showing system apps
 final showSystemAppsProvider = StateProvider<bool>((ref) => false);
 
+// Toggle for filtering to only split APK apps
+final showOnlySplitAppsProvider = StateProvider<bool>((ref) => false);
+
 // Search query
 final searchQueryProvider = StateProvider<String>((ref) => '');
 
-// Filtered apps based on search
+// Filtered apps based on search and filters
 final filteredAppsProvider = Provider<AsyncValue<List<AppInfo>>>((ref) {
   final appsAsync = ref.watch(installedAppsProvider);
   final query = ref.watch(searchQueryProvider).toLowerCase();
+  final onlySplit = ref.watch(showOnlySplitAppsProvider);
 
   return appsAsync.whenData((apps) {
-    if (query.isEmpty) return apps;
-    return apps.where((app) {
-      return app.appName.toLowerCase().contains(query) ||
-          app.packageName.toLowerCase().contains(query);
-    }).toList();
+    var filtered = apps;
+
+    if (onlySplit) {
+      filtered = filtered.where((app) => app.hasSplitApks).toList();
+    }
+
+    if (query.isNotEmpty) {
+      filtered = filtered.where((app) {
+        return app.appName.toLowerCase().contains(query) ||
+            app.packageName.toLowerCase().contains(query);
+      }).toList();
+    }
+
+    return filtered;
   });
+});
+
+// Stats providers
+final splitAppCountProvider = Provider<AsyncValue<int>>((ref) {
+  return ref.watch(installedAppsProvider).whenData(
+    (apps) => apps.where((a) => a.hasSplitApks).length,
+  );
 });
