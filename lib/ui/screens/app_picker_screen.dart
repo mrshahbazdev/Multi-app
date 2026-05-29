@@ -12,11 +12,27 @@ class AppPickerScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final filteredApps = ref.watch(filteredAppsProvider);
     final showSystemApps = ref.watch(showSystemAppsProvider);
+    final showOnlySplit = ref.watch(showOnlySplitAppsProvider);
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Select App'),
         actions: [
+          FilterChip(
+            label: Text(
+              'Split',
+              style: TextStyle(
+                color: showOnlySplit ? Colors.white : Colors.white54,
+                fontSize: 12,
+              ),
+            ),
+            selected: showOnlySplit,
+            onSelected: (val) => ref.read(showOnlySplitAppsProvider.notifier).state = val,
+            selectedColor: Colors.orange,
+            backgroundColor: const Color(0xFF2A2A3E),
+            checkmarkColor: Colors.white,
+          ),
+          const SizedBox(width: 4),
           FilterChip(
             label: Text(
               'System',
@@ -91,26 +107,49 @@ class AppPickerScreen extends ConsumerWidget {
       );
     }
 
-    return ListView.builder(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      itemCount: apps.length,
-      itemBuilder: (context, index) {
-        final app = apps[index];
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 8),
-          child: AppTile(
-            appInfo: app,
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => CloneConfigScreen(appInfo: app),
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Row(
+            children: [
+              Text(
+                '${apps.length} apps',
+                style: const TextStyle(fontSize: 12, color: Colors.white38),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '(${apps.where((a) => a.hasSplitApks).length} split)',
+                style: const TextStyle(fontSize: 12, color: Colors.orange),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 8),
+        Expanded(
+          child: ListView.builder(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            itemCount: apps.length,
+            itemBuilder: (context, index) {
+              final app = apps[index];
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: AppTile(
+                  appInfo: app,
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => CloneConfigScreen(appInfo: app),
+                      ),
+                    );
+                  },
                 ),
               );
             },
           ),
-        );
-      },
+        ),
+      ],
     );
   }
 }

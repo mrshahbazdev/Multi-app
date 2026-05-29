@@ -91,6 +91,20 @@ class CloneTile extends StatelessWidget {
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
+                        if (clone.isSplitApk) ...[
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(4),
+                              color: Colors.orange.withOpacity(0.15),
+                            ),
+                            child: Text(
+                              'Split (${clone.splitCount})',
+                              style: const TextStyle(fontSize: 9, color: Colors.orange),
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                     const SizedBox(height: 4),
@@ -218,6 +232,8 @@ class CloneTile extends StatelessWidget {
             _infoRow('Clone Index', '#${clone.cloneIndex}'),
             _infoRow('Version', clone.originalVersionName),
             _infoRow('Created', clone.createdAt.toString().substring(0, 16)),
+            if (clone.isSplitApk)
+              _infoRow('Split APK', '${clone.splitCount} splits'),
           ],
         ),
         actions: [

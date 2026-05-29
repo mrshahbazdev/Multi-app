@@ -5,6 +5,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:app_cloner/models/app_info.dart';
 import 'package:app_cloner/services/clone_service.dart';
 import 'package:app_cloner/services/icon_service.dart';
+import 'package:app_cloner/services/native_bridge.dart';
 import 'package:app_cloner/ui/screens/cloning_progress_screen.dart';
 
 class CloneConfigScreen extends ConsumerStatefulWidget {
@@ -22,6 +23,8 @@ class _CloneConfigScreenState extends ConsumerState<CloneConfigScreen> {
   Color _selectedColor = IconService.iconColors[0];
   Uint8List? _customIconBytes;
   bool _useCustomIcon = false;
+  SplitApkDetails? _splitDetails;
+  bool _loadingSplitInfo = false;
 
   @override
   void initState() {
@@ -31,6 +34,25 @@ class _CloneConfigScreenState extends ConsumerState<CloneConfigScreen> {
       text: '${widget.appInfo.appName} Clone $_cloneIndex',
     );
     _selectedColor = IconService.getDefaultColor(_cloneIndex);
+
+    if (widget.appInfo.hasSplitApks) {
+      _loadSplitInfo();
+    }
+  }
+
+  Future<void> _loadSplitInfo() async {
+    setState(() => _loadingSplitInfo = true);
+    try {
+      final details = await NativeBridge.getSplitInfo(widget.appInfo.packageName);
+      if (mounted) {
+        setState(() {
+          _splitDetails = details;
+          _loadingSplitInfo = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _loadingSplitInfo = false);
+    }
   }
 
   @override
@@ -106,7 +128,13 @@ class _CloneConfigScreenState extends ConsumerState<CloneConfigScreen> {
                 ),
               ),
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 16),
+
+            // Split APK details
+            if (widget.appInfo.hasSplitApks) ...[
+              _buildSplitDetailsCard(),
+              const SizedBox(height: 16),
+            ],
 
             // Existing clones
             if (existingClones.isNotEmpty) ...[
@@ -187,6 +215,117 @@ class _CloneConfigScreenState extends ConsumerState<CloneConfigScreen> {
         ),
       ),
     );
+  }
+
+  Widget _buildSplitDetailsCard() {
+    if (_loadingSplitInfo) {
+      return const Card(
+        child: Padding(
+          padding: EdgeInsets.all(16),
+          child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+        ),
+      );
+    }
+
+    final details = _splitDetails;
+    if (details == null || !details.isSplit) {
+      return const SizedBox.shrink();
+    }
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.extension, color: Colors.orange, size: 20),
+                const SizedBox(width: 8),
+                Text(
+                  'Split APK Details (${details.splitCount} splits)',
+                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                ),
+                const Spacer(),
+                Text(
+                  details.totalSizeFormatted,
+                  style: const TextStyle(fontSize: 12, color: Colors.white54),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(8),
+                color: Colors.orange.withOpacity(0.08),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.info_outline, size: 16, color: Colors.orange),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'All splits will be merged into a single APK for cloning',
+                      style: TextStyle(fontSize: 11, color: Colors.orange),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            ...details.splits.map((split) => Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Row(
+                    children: [
+                      Icon(
+                        _splitTypeIcon(split.type),
+                        size: 16,
+                        color: _splitTypeColor(split.type),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          split.fileName,
+                          style: const TextStyle(fontSize: 12),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      _infoChip(split.type, color: _splitTypeColor(split.type)),
+                      const SizedBox(width: 8),
+                      Text(
+                        split.sizeFormatted,
+                        style: const TextStyle(fontSize: 11, color: Colors.white38),
+                      ),
+                    ],
+                  ),
+                )),
+          ],
+        ),
+      ),
+    );
+  }
+
+  IconData _splitTypeIcon(String type) {
+    switch (type.toUpperCase()) {
+      case 'BASE': return Icons.apps;
+      case 'ABI': return Icons.memory;
+      case 'DENSITY': return Icons.photo_size_select_large;
+      case 'LOCALE': return Icons.language;
+      case 'FEATURE': return Icons.extension;
+      default: return Icons.insert_drive_file;
+    }
+  }
+
+  Color _splitTypeColor(String type) {
+    switch (type.toUpperCase()) {
+      case 'BASE': return Colors.blue;
+      case 'ABI': return Colors.green;
+      case 'DENSITY': return Colors.purple;
+      case 'LOCALE': return Colors.teal;
+      case 'FEATURE': return Colors.amber;
+      default: return Colors.grey;
+    }
   }
 
   Widget _buildIconSection() {
@@ -357,7 +496,6 @@ class _CloneConfigScreenState extends ConsumerState<CloneConfigScreen> {
                     )
                   : const Icon(Icons.android, color: Colors.white38),
         ),
-        // Clone badge
         Positioned(
           right: -2,
           bottom: -2,

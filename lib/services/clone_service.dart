@@ -35,7 +35,7 @@ class CloneService {
     final cloneIndex = getNextCloneIndex(appInfo.packageName);
     final cloneName = customName ?? '${appInfo.appName} Clone $cloneIndex';
 
-    onProgress?.call('Extracting APK...', 0.1);
+    onProgress?.call('Preparing...', 0.0);
 
     // Call native to clone the app
     final clonePackage = await NativeBridge.cloneApp(
@@ -54,6 +54,8 @@ class CloneService {
       createdAt: DateTime.now(),
       cloneIndex: cloneIndex,
       originalVersionName: appInfo.versionName,
+      isSplitApk: appInfo.hasSplitApks,
+      splitCount: appInfo.splitApkPaths?.length ?? 0,
     );
 
     await _box.add(clone);
@@ -62,9 +64,7 @@ class CloneService {
 
   /// Delete a clone
   static Future<void> deleteClone(CloneInfo clone) async {
-    // Uninstall the cloned app
     await NativeBridge.uninstallApp(clone.clonePackage);
-    // Remove from database
     await clone.delete();
   }
 

@@ -17,6 +17,9 @@ class AppConstants {
   static const String methodLaunchApp = 'launchApp';
   static const String methodIsAppInstalled = 'isAppInstalled';
   static const String methodGetApkSize = 'getApkSize';
+  static const String methodGetSplitInfo = 'getSplitInfo';
+  static const String methodCanInstallPackages = 'canInstallPackages';
+  static const String methodRequestInstallPermission = 'requestInstallPermission';
   static const String methodCleanupCache = 'cleanupCache';
   static const String methodGetStorageInfo = 'getStorageInfo';
 

@@ -99,6 +99,20 @@ class _CloningProgressScreenState extends ConsumerState<CloningProgressScreen> {
                   color: Colors.white54,
                 ),
               ),
+              if (widget.appInfo.hasSplitApks) ...[
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(12),
+                    color: Colors.orange.withOpacity(0.15),
+                  ),
+                  child: Text(
+                    'Split APK (${widget.appInfo.splitApkPaths?.length ?? 0} splits)',
+                    style: const TextStyle(fontSize: 12, color: Colors.orange),
+                  ),
+                ),
+              ],
               const SizedBox(height: 32),
 
               // Progress bar
