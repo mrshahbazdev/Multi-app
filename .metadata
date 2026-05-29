@@ -1,0 +1,17 @@
+# This file tracks properties of this Flutter project.
+version:
+  revision: "auto"
+  channel: "stable"
+
+project_type: app
+
+migration:
+  platforms:
+    - platform: root
+      create_revision: "auto"
+    - platform: android
+      create_revision: "auto"
+
+  unmanaged_files:
+    - "lib/main.dart"
+    - "android/app/src/main/kotlin/com/appcloner/app/"

@@ -1,32 +1,41 @@
 package com.appcloner.app
 
 import android.content.Context
+import org.bouncycastle.asn1.x500.X500Name
+import org.bouncycastle.cert.X509v3CertificateBuilder
+import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter
+import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder
+import org.bouncycastle.cms.CMSProcessableByteArray
+import org.bouncycastle.cms.CMSSignedDataGenerator
+import org.bouncycastle.cms.jcajce.JcaSignerInfoGeneratorBuilder
+import org.bouncycastle.jce.provider.BouncyCastleProvider
+import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder
+import org.bouncycastle.operator.jcajce.JcaDigestCalculatorProviderBuilder
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
-import java.security.KeyPairGenerator
-import java.security.KeyStore
-import java.security.PrivateKey
+import java.math.BigInteger
+import java.security.*
 import java.security.cert.X509Certificate
-import java.util.jar.*
-import java.security.MessageDigest
-import java.util.Base64
+import java.util.*
+import java.util.jar.Attributes
+import java.util.jar.Manifest
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
-import javax.security.auth.x500.X500Principal
-import java.math.BigInteger
-import java.util.Date
-import java.security.cert.CertificateFactory
 
 /**
- * Signs modified APK files with a generated keystore.
- * Uses JAR signing (v1) for broad compatibility.
- *
- * For production, you should also support APK Signature Scheme v2/v3
- * using Android's apksigner tool.
+ * Signs modified APK files using BouncyCastle for certificate generation
+ * and JAR signing (v1) for broad compatibility.
  */
 class ApkSigner(private val context: Context) {
+
+    companion object {
+        init {
+            Security.addProvider(BouncyCastleProvider())
+        }
+    }
 
     private val keystoreFile: File
         get() = File(context.filesDir, "clone_keystore.bks")
@@ -42,22 +51,17 @@ class ApkSigner(private val context: Context) {
         val inputFile = File(apkPath)
         val outputFile = File(inputFile.parent, "signed.apk")
 
-        // Ensure we have a keystore
         ensureKeystore()
 
-        // Load keystore
-        val keystore = KeyStore.getInstance("BKS")
+        val keystore = KeyStore.getInstance("BKS", "BC")
         FileInputStream(keystoreFile).use { fis ->
             keystore.load(fis, keystorePassword.toCharArray())
         }
 
         val privateKey = keystore.getKey(keyAlias, keyPassword.toCharArray()) as PrivateKey
-        val certChain = keystore.getCertificateChain(keyAlias)
-        val cert = certChain[0] as X509Certificate
+        val cert = keystore.getCertificateChain(keyAlias)[0] as X509Certificate
 
-        // Sign using v1 (JAR signing)
         signV1(inputFile, outputFile, privateKey, cert)
-
         return outputFile.absolutePath
     }
 
@@ -70,7 +74,6 @@ class ApkSigner(private val context: Context) {
         privateKey: PrivateKey,
         cert: X509Certificate
     ) {
-        // First, create manifest with SHA-256 digests of all entries
         val manifest = Manifest()
         manifest.mainAttributes[Attributes.Name.MANIFEST_VERSION] = "1.0"
         manifest.mainAttributes[Attributes.Name("Created-By")] = "App Cloner"
@@ -92,24 +95,23 @@ class ApkSigner(private val context: Context) {
             manifest.entries[entry.name] = attr
         }
 
-        // Write output APK with META-INF
         ZipOutputStream(FileOutputStream(outputApk)).use { zipOut ->
-            // Write manifest
-            val manifestBytes = java.io.ByteArrayOutputStream()
-            manifest.write(manifestBytes)
-            val manifestData = manifestBytes.toByteArray()
+            // Write MANIFEST.MF
+            val manifestBaos = ByteArrayOutputStream()
+            manifest.write(manifestBaos)
+            val manifestData = manifestBaos.toByteArray()
 
             zipOut.putNextEntry(ZipEntry("META-INF/MANIFEST.MF"))
             zipOut.write(manifestData)
             zipOut.closeEntry()
 
-            // Create signature file (CERT.SF)
+            // Write CERT.SF
             val sfBytes = createSignatureFile(manifest)
             zipOut.putNextEntry(ZipEntry("META-INF/CERT.SF"))
             zipOut.write(sfBytes)
             zipOut.closeEntry()
 
-            // Create PKCS7 signature block (CERT.RSA)
+            // Write CERT.RSA (PKCS7 signature block)
             val sigBlock = createSignatureBlock(sfBytes, privateKey, cert)
             zipOut.putNextEntry(ZipEntry("META-INF/CERT.RSA"))
             zipOut.write(sigBlock)
@@ -122,14 +124,12 @@ class ApkSigner(private val context: Context) {
                 val entry = inputEntries.nextElement()
                 if (entry.name.startsWith("META-INF/")) continue
 
-                val newEntry = ZipEntry(entry.name)
-                zipOut.putNextEntry(newEntry)
+                zipOut.putNextEntry(ZipEntry(entry.name))
                 zipOut.write(inputZip.getInputStream(entry).readBytes())
                 zipOut.closeEntry()
             }
             inputZip.close()
         }
-
         zipFile.close()
     }
 
@@ -137,12 +137,12 @@ class ApkSigner(private val context: Context) {
      * Create the .SF (signature file) from the manifest.
      */
     private fun createSignatureFile(manifest: Manifest): ByteArray {
-        val manifestBytes = java.io.ByteArrayOutputStream()
-        manifest.write(manifestBytes)
+        val manifestBaos = ByteArrayOutputStream()
+        manifest.write(manifestBaos)
 
         val digest = MessageDigest.getInstance("SHA-256")
         val mainDigest = Base64.getEncoder().encodeToString(
-            digest.digest(manifestBytes.toByteArray())
+            digest.digest(manifestBaos.toByteArray())
         )
 
         val sb = StringBuilder()
@@ -151,7 +151,6 @@ class ApkSigner(private val context: Context) {
         sb.append("SHA-256-Digest-Manifest: $mainDigest\r\n")
         sb.append("\r\n")
 
-        // Add per-entry digests
         for ((name, _) in manifest.entries) {
             val entryBlock = "Name: $name\r\n"
             val entryDigest = Base64.getEncoder().encodeToString(
@@ -166,39 +165,31 @@ class ApkSigner(private val context: Context) {
     }
 
     /**
-     * Create PKCS7 signature block.
-     * Simplified — for production use Android's apksigner.
+     * Create PKCS7 signature block using BouncyCastle CMS.
      */
     private fun createSignatureBlock(
         sfData: ByteArray,
         privateKey: PrivateKey,
         cert: X509Certificate
     ): ByteArray {
-        val signature = java.security.Signature.getInstance("SHA256withRSA")
-        signature.initSign(privateKey)
-        signature.update(sfData)
-        val signedData = signature.sign()
+        val generator = CMSSignedDataGenerator()
 
-        // Build a simple PKCS7 block
-        // For a full implementation, use BouncyCastle's CMSSignedDataGenerator
-        // This simplified version works for most Android versions
-        return buildSimplePkcs7(cert.encoded, signedData)
-    }
+        val contentSigner = JcaContentSignerBuilder("SHA256withRSA")
+            .setProvider("BC")
+            .build(privateKey)
 
-    /**
-     * Build a minimal PKCS7 signed data structure.
-     */
-    private fun buildSimplePkcs7(certBytes: ByteArray, signature: ByteArray): ByteArray {
-        // For production, use proper PKCS7/CMS library
-        // This is a simplified implementation
-        val out = java.io.ByteArrayOutputStream()
+        val digestProvider = JcaDigestCalculatorProviderBuilder()
+            .setProvider("BC")
+            .build()
 
-        // In production, use BouncyCastle or Android's built-in apksigner
-        // For now, we'll use the cert and signature directly
-        out.write(certBytes)
-        out.write(signature)
+        generator.addSignerInfoGenerator(
+            JcaSignerInfoGeneratorBuilder(digestProvider)
+                .build(contentSigner, cert)
+        )
 
-        return out.toByteArray()
+        val content = CMSProcessableByteArray(sfData)
+        val signedData = generator.generate(content, true)
+        return signedData.encoded
     }
 
     /**
@@ -207,16 +198,13 @@ class ApkSigner(private val context: Context) {
     private fun ensureKeystore() {
         if (keystoreFile.exists()) return
 
-        // Generate RSA key pair
         val keyPairGen = KeyPairGenerator.getInstance("RSA")
-        keyPairGen.initialize(2048)
+        keyPairGen.initialize(2048, SecureRandom())
         val keyPair = keyPairGen.generateKeyPair()
 
-        // Generate self-signed certificate
         val cert = generateSelfSignedCert(keyPair)
 
-        // Create keystore
-        val keystore = KeyStore.getInstance("BKS")
+        val keystore = KeyStore.getInstance("BKS", "BC")
         keystore.load(null, keystorePassword.toCharArray())
         keystore.setKeyEntry(
             keyAlias,
@@ -231,52 +219,30 @@ class ApkSigner(private val context: Context) {
     }
 
     /**
-     * Generate a self-signed X509 certificate.
-     * Uses Android's internal API or BouncyCastle.
+     * Generate a self-signed X509 certificate using BouncyCastle.
      */
-    private fun generateSelfSignedCert(keyPair: java.security.KeyPair): X509Certificate {
-        val subject = X500Principal("CN=App Cloner, O=Clone")
+    private fun generateSelfSignedCert(keyPair: KeyPair): X509Certificate {
+        val subject = X500Name("CN=App Cloner, O=Clone, C=US")
         val notBefore = Date()
         val notAfter = Date(notBefore.time + 25L * 365 * 24 * 3600 * 1000) // 25 years
+        val serialNumber = BigInteger(128, SecureRandom())
 
-        // Use Android's hidden API for self-signed cert generation
-        // In production, use BouncyCastle's X509v3CertificateBuilder
-        val certGen = android.security.keystore.KeyGenParameterSpec.Builder(
-            keyAlias, android.security.keystore.KeyProperties.PURPOSE_SIGN
-        ).build()
+        val certBuilder: X509v3CertificateBuilder = JcaX509v3CertificateBuilder(
+            subject,
+            serialNumber,
+            notBefore,
+            notAfter,
+            subject,
+            keyPair.public
+        )
 
-        // Simplified: use Java's built-in cert generation
-        // For production, add BouncyCastle dependency
-        val signer = java.security.Signature.getInstance("SHA256withRSA")
-        signer.initSign(keyPair.private)
+        val contentSigner = JcaContentSignerBuilder("SHA256withRSA")
+            .setProvider("BC")
+            .build(keyPair.private)
 
-        // Build X509 cert manually or use a library
-        // For now, use the sun.security approach (available on Android)
-        @Suppress("DEPRECATION")
-        val certInfo = sun.security.x509.X509CertInfo()
-        val from = Date()
-        val to = Date(from.time + 25L * 365 * 24 * 3600 * 1000)
-
-        val interval = sun.security.x509.CertificateValidity(from, to)
-        val serialNumber = BigInteger(64, java.security.SecureRandom())
-        val owner = sun.security.x509.X500Name("CN=App Cloner, O=Clone")
-
-        certInfo.set(sun.security.x509.X509CertInfo.VALIDITY, interval)
-        certInfo.set(sun.security.x509.X509CertInfo.SERIAL_NUMBER,
-            sun.security.x509.CertificateSerialNumber(serialNumber))
-        certInfo.set(sun.security.x509.X509CertInfo.SUBJECT, owner)
-        certInfo.set(sun.security.x509.X509CertInfo.ISSUER, owner)
-        certInfo.set(sun.security.x509.X509CertInfo.KEY,
-            sun.security.x509.CertificateX509Key(keyPair.public))
-        certInfo.set(sun.security.x509.X509CertInfo.VERSION,
-            sun.security.x509.CertificateVersion(sun.security.x509.CertificateVersion.V3))
-        certInfo.set(sun.security.x509.X509CertInfo.ALGORITHM_ID,
-            sun.security.x509.CertificateAlgorithmId(
-                sun.security.x509.AlgorithmId.get("SHA256withRSA")))
-
-        val cert = sun.security.x509.X509CertImpl(certInfo)
-        cert.sign(keyPair.private, "SHA256withRSA")
-
-        return cert
+        val certHolder = certBuilder.build(contentSigner)
+        return JcaX509CertificateConverter()
+            .setProvider("BC")
+            .getCertificate(certHolder)
     }
 }
