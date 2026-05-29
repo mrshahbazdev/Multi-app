@@ -28,6 +28,12 @@ class CloneInfo extends HiveObject {
   @HiveField(7)
   final String originalVersionName;
 
+  @HiveField(8)
+  final bool isSplitApk;
+
+  @HiveField(9)
+  final int splitCount;
+
   CloneInfo({
     required this.originalPackage,
     required this.clonePackage,
@@ -37,6 +43,8 @@ class CloneInfo extends HiveObject {
     required this.cloneIndex,
     this.apkPath,
     required this.originalVersionName,
+    this.isSplitApk = false,
+    this.splitCount = 0,
   });
 
   String get displayName => cloneName.isNotEmpty ? cloneName : '$originalAppName Clone $cloneIndex';

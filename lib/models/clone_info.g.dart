@@ -21,13 +21,15 @@ class CloneInfoAdapter extends TypeAdapter<CloneInfo> {
       cloneIndex: fields[5] as int,
       apkPath: fields[6] as String?,
       originalVersionName: fields[7] as String,
+      isSplitApk: fields[8] as bool? ?? false,
+      splitCount: fields[9] as int? ?? 0,
     );
   }
 
   @override
   void write(BinaryWriter writer, CloneInfo obj) {
     writer
-      ..writeByte(8)
+      ..writeByte(10)
       ..writeByte(0)
       ..write(obj.originalPackage)
       ..writeByte(1)
@@ -43,7 +45,11 @@ class CloneInfoAdapter extends TypeAdapter<CloneInfo> {
       ..writeByte(6)
       ..write(obj.apkPath)
       ..writeByte(7)
-      ..write(obj.originalVersionName);
+      ..write(obj.originalVersionName)
+      ..writeByte(8)
+      ..write(obj.isSplitApk)
+      ..writeByte(9)
+      ..write(obj.splitCount);
   }
 
   @override

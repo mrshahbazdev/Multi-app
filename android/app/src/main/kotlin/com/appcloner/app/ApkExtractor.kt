@@ -1,30 +1,60 @@
 package com.appcloner.app
 
 import android.content.Context
-import android.content.pm.PackageManager
+import android.util.Log
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 
 /**
  * Extracts APK files from installed apps.
- * Copies the APK to our app's private storage for modification.
+ * Handles both single APKs and split APKs (App Bundles).
  */
 class ApkExtractor(private val context: Context) {
+
+    companion object {
+        private const val TAG = "ApkExtractor"
+    }
 
     private val workDir: File
         get() = File(context.filesDir, "clone_work").also { it.mkdirs() }
 
+    private val splitHandler = SplitApkHandler(context)
+
+    data class ExtractionResult(
+        val basePath: String,
+        val isSplit: Boolean,
+        val splitPaths: Map<SplitApkHandler.SplitType, List<String>>,
+        val totalSizeBytes: Long
+    )
+
     /**
-     * Extract APK for a given package name.
-     * Returns the path to the extracted APK in our private storage.
+     * Extract APK(s) for a given package.
+     * Automatically detects split APKs and extracts all splits.
      */
-    fun extractApk(packageName: String): String {
-        val pm = context.packageManager
-        val appInfo = pm.getApplicationInfo(packageName, 0)
+    fun extract(
+        packageName: String,
+        onProgress: ((String, Double) -> Unit)? = null
+    ): ExtractionResult {
+        val isSplit = splitHandler.isSplitApk(packageName)
+
+        return if (isSplit) {
+            extractSplitApk(packageName, onProgress)
+        } else {
+            extractSingleApk(packageName, onProgress)
+        }
+    }
+
+    /**
+     * Extract a single (non-split) APK.
+     */
+    private fun extractSingleApk(
+        packageName: String,
+        onProgress: ((String, Double) -> Unit)? = null
+    ): ExtractionResult {
+        val appInfo = context.packageManager.getApplicationInfo(packageName, 0)
         val sourceApk = File(appInfo.sourceDir)
 
-        // Create output directory for this clone operation
         val outputDir = File(workDir, packageName).also {
             it.deleteRecursively()
             it.mkdirs()
@@ -32,47 +62,91 @@ class ApkExtractor(private val context: Context) {
 
         val outputApk = File(outputDir, "base.apk")
 
-        // Copy APK to our storage
-        FileInputStream(sourceApk).use { input ->
-            FileOutputStream(outputApk).use { output ->
-                input.copyTo(output, bufferSize = 8192)
-            }
+        onProgress?.invoke("Extracting APK...", 0.2)
+        Log.d(TAG, "Extracting single APK: ${sourceApk.absolutePath} (${sourceApk.length() / 1024}KB)")
+
+        copyFile(sourceApk, outputApk, onProgress, 0.2, 0.8)
+
+        onProgress?.invoke("Extraction complete", 1.0)
+
+        return ExtractionResult(
+            basePath = outputApk.absolutePath,
+            isSplit = false,
+            splitPaths = mapOf(SplitApkHandler.SplitType.BASE to listOf(outputApk.absolutePath)),
+            totalSizeBytes = outputApk.length()
+        )
+    }
+
+    /**
+     * Extract all split APKs for an app.
+     */
+    private fun extractSplitApk(
+        packageName: String,
+        onProgress: ((String, Double) -> Unit)? = null
+    ): ExtractionResult {
+        val splitInfo = splitHandler.getSplitInfo(packageName)
+        val totalSize = splitInfo.sumOf { it.sizeBytes }
+
+        Log.d(TAG, "Extracting split APK: $packageName (${splitInfo.size} splits, ${totalSize / 1024}KB total)")
+
+        onProgress?.invoke("Extracting ${splitInfo.size} split APKs...", 0.1)
+
+        val splitPaths = splitHandler.extractAllSplits(packageName, workDir)
+
+        // Find the base APK path
+        val basePath = splitPaths[SplitApkHandler.SplitType.BASE]?.firstOrNull()
+            ?: throw IllegalStateException("No base APK found for $packageName")
+
+        // Report what was extracted
+        for ((type, paths) in splitPaths) {
+            Log.d(TAG, "  $type: ${paths.size} file(s)")
         }
 
-        // Also copy split APKs if they exist
-        appInfo.splitSourceDirs?.forEachIndexed { index, splitPath ->
-            val splitFile = File(splitPath)
-            val outputSplit = File(outputDir, "split_$index.apk")
-            FileInputStream(splitFile).use { input ->
-                FileOutputStream(outputSplit).use { output ->
-                    input.copyTo(output, bufferSize = 8192)
+        onProgress?.invoke("All splits extracted", 1.0)
+
+        return ExtractionResult(
+            basePath = basePath,
+            isSplit = true,
+            splitPaths = splitPaths,
+            totalSizeBytes = totalSize
+        )
+    }
+
+    /**
+     * Copy a file with progress reporting.
+     */
+    private fun copyFile(
+        source: File,
+        dest: File,
+        onProgress: ((String, Double) -> Unit)?,
+        startProgress: Double,
+        endProgress: Double
+    ) {
+        val totalBytes = source.length()
+        var copiedBytes = 0L
+        val buffer = ByteArray(16384)
+
+        FileInputStream(source).use { input ->
+            FileOutputStream(dest).use { output ->
+                var bytesRead: Int
+                while (input.read(buffer).also { bytesRead = it } != -1) {
+                    output.write(buffer, 0, bytesRead)
+                    copiedBytes += bytesRead
+                    val fraction = copiedBytes.toDouble() / totalBytes
+                    val progress = startProgress + (endProgress - startProgress) * fraction
+                    onProgress?.invoke("Extracting... ${(fraction * 100).toInt()}%", progress)
                 }
             }
         }
-
-        return outputApk.absolutePath
     }
 
-    /**
-     * Get all split APK paths for an app if it uses App Bundles.
-     */
-    fun getSplitApks(packageName: String): List<String> {
-        val pm = context.packageManager
-        val appInfo = pm.getApplicationInfo(packageName, 0)
-        return appInfo.splitSourceDirs?.toList() ?: emptyList()
-    }
-
-    /**
-     * Clean up work directory for a package.
-     */
     fun cleanup(packageName: String) {
         File(workDir, packageName).deleteRecursively()
     }
 
-    /**
-     * Clean up all work directories.
-     */
     fun cleanupAll() {
         workDir.deleteRecursively()
     }
+
+    fun getWorkDir(): File = workDir
 }

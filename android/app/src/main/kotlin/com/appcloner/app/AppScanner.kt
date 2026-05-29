@@ -54,7 +54,9 @@ class AppScanner(private val context: Context) {
                 "isSystemApp" to isSystemApp,
                 "apkSizeBytes" to apkFile.length().toInt(),
                 "iconBytes" to iconBytes,
-                "splitApkPaths" to splitPaths
+                "splitApkPaths" to splitPaths,
+                "splitCount" to (splitPaths?.size ?: 0),
+                "isSplitApk" to (splitPaths != null && splitPaths.isNotEmpty())
             ))
         }
 

@@ -25,15 +25,22 @@ class NativeBridge {
     return Uint8List.fromList(List<int>.from(result));
   }
 
+  /// Get detailed split APK info for an app
+  static Future<SplitApkDetails> getSplitInfo(String packageName) async {
+    final result = await _channel.invokeMethod(
+      'getSplitInfo',
+      {'packageName': packageName},
+    );
+    return SplitApkDetails.fromMap(Map<dynamic, dynamic>.from(result));
+  }
+
   /// Clone an app - returns clone package name
-  /// [progressCallback] receives status updates: extracting, modifying, signing
   static Future<String> cloneApp({
     required String packageName,
     required String cloneName,
     required int cloneIndex,
     Function(String status, double progress)? progressCallback,
   }) async {
-    // Set up event channel for progress updates
     _channel.setMethodCallHandler((call) async {
       if (call.method == 'onCloneProgress') {
         final args = call.arguments as Map;
@@ -92,4 +99,71 @@ class NativeBridge {
     );
     return result as bool;
   }
+
+  /// Check if we can install packages
+  static Future<bool> canInstallPackages() async {
+    final result = await _channel.invokeMethod('canInstallPackages');
+    return result as bool;
+  }
+
+  /// Request permission to install unknown apps
+  static Future<void> requestInstallPermission() async {
+    await _channel.invokeMethod('requestInstallPermission');
+  }
+
+  /// Clean up cache files
+  static Future<void> cleanupCache() async {
+    await _channel.invokeMethod('cleanupCache');
+  }
+}
+
+/// Detailed info about an app's split APKs
+class SplitApkDetails {
+  final bool isSplit;
+  final int splitCount;
+  final int totalSizeBytes;
+  final String totalSizeFormatted;
+  final List<SplitInfo> splits;
+
+  SplitApkDetails({
+    required this.isSplit,
+    required this.splitCount,
+    required this.totalSizeBytes,
+    required this.totalSizeFormatted,
+    required this.splits,
+  });
+
+  factory SplitApkDetails.fromMap(Map<dynamic, dynamic> map) {
+    final splitsList = (map['splits'] as List<dynamic>?)?.map((s) {
+      final m = Map<dynamic, dynamic>.from(s);
+      return SplitInfo(
+        fileName: m['fileName'] as String,
+        type: m['type'] as String,
+        sizeBytes: m['sizeBytes'] as int,
+        sizeFormatted: m['sizeFormatted'] as String,
+      );
+    }).toList() ?? [];
+
+    return SplitApkDetails(
+      isSplit: map['isSplit'] as bool? ?? false,
+      splitCount: map['splitCount'] as int? ?? 1,
+      totalSizeBytes: map['totalSizeBytes'] as int? ?? 0,
+      totalSizeFormatted: map['totalSizeFormatted'] as String? ?? '0 B',
+      splits: splitsList,
+    );
+  }
+}
+
+class SplitInfo {
+  final String fileName;
+  final String type;
+  final int sizeBytes;
+  final String sizeFormatted;
+
+  SplitInfo({
+    required this.fileName,
+    required this.type,
+    required this.sizeBytes,
+    required this.sizeFormatted,
+  });
 }
