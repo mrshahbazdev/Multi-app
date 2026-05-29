@@ -6,7 +6,9 @@ import 'package:app_cloner/models/app_info.dart';
 import 'package:app_cloner/services/clone_service.dart';
 import 'package:app_cloner/services/icon_service.dart';
 import 'package:app_cloner/services/native_bridge.dart';
+import 'package:app_cloner/services/stealth_service.dart';
 import 'package:app_cloner/ui/screens/cloning_progress_screen.dart';
+import 'package:app_cloner/ui/screens/stealth_settings_screen.dart';
 
 class CloneConfigScreen extends ConsumerStatefulWidget {
   final AppInfo appInfo;
@@ -25,6 +27,7 @@ class _CloneConfigScreenState extends ConsumerState<CloneConfigScreen> {
   bool _useCustomIcon = false;
   SplitApkDetails? _splitDetails;
   bool _loadingSplitInfo = false;
+  bool _stealthEnabled = true;
 
   @override
   void initState() {
@@ -183,6 +186,10 @@ class _CloneConfigScreenState extends ConsumerState<CloneConfigScreen> {
 
             // Icon customization
             _buildIconSection(),
+            const SizedBox(height: 24),
+
+            // Stealth mode
+            _buildStealthSection(),
             const SizedBox(height: 32),
 
             // Clone button
@@ -465,6 +472,103 @@ class _CloneConfigScreenState extends ConsumerState<CloneConfigScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildStealthSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Stealth Mode',
+          style: TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+            color: Colors.white54,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Card(
+          child: Column(
+            children: [
+              SwitchListTile(
+                title: const Row(
+                  children: [
+                    Icon(Icons.shield, size: 20, color: Colors.red),
+                    SizedBox(width: 12),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Enable Stealth', style: TextStyle(fontSize: 14)),
+                        Text(
+                          'Anti-detection patches for this clone',
+                          style: TextStyle(fontSize: 11, color: Colors.white38),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+                value: _stealthEnabled,
+                onChanged: (v) => setState(() => _stealthEnabled = v),
+              ),
+              if (_stealthEnabled) ...[
+                const Divider(height: 1),
+                ListTile(
+                  leading: const Icon(Icons.tune, size: 20, color: Colors.white38),
+                  title: const Text('Advanced Stealth Settings', style: TextStyle(fontSize: 13)),
+                  trailing: const Icon(Icons.chevron_right, size: 20),
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const StealthSettingsScreen()),
+                    );
+                  },
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                  child: Wrap(
+                    spacing: 6,
+                    runSpacing: 4,
+                    children: [
+                      _stealthChip('Signature Spoof', true),
+                      _stealthChip('Debug Strip', true),
+                      _stealthChip('Device Spoof', true),
+                    ],
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _stealthChip(String label, bool enabled) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(6),
+        color: enabled ? Colors.green.withOpacity(0.12) : Colors.white.withOpacity(0.05),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            enabled ? Icons.check_circle : Icons.cancel,
+            size: 12,
+            color: enabled ? Colors.green : Colors.white38,
+          ),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 10,
+              color: enabled ? Colors.green : Colors.white38,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
