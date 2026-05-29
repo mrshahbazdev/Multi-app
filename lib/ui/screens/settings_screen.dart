@@ -4,6 +4,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:app_cloner/providers/clone_provider.dart';
 import 'package:app_cloner/services/backup_service.dart';
 import 'package:app_cloner/services/clone_service.dart';
+import 'package:app_cloner/ui/screens/stealth_settings_screen.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -81,6 +82,21 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ]),
           const SizedBox(height: 16),
 
+          _buildSection('Stealth & Anti-Detection', [
+            _buildTile(
+              'Stealth Settings',
+              'Signature spoof, device fingerprint, package randomization',
+              Icons.shield,
+              () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const StealthSettingsScreen()),
+                );
+              },
+            ),
+          ]),
+          const SizedBox(height: 16),
+
           _buildSection('General', [
             _buildToggleTile(
               'Dark Mode',
@@ -100,7 +116,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           const SizedBox(height: 16),
 
           _buildSection('About', [
-            _buildTile('Version', '1.1.0 (Phase 3)', Icons.info_outline, null),
+            _buildTile('Version', '1.2.0 (Phase 4)', Icons.info_outline, null),
             _buildTile('Developer', 'App Cloner Team', Icons.code, null),
             _buildTile('Rate Us', 'Rate on Play Store', Icons.star_outline, () {}),
             _buildTile('Privacy Policy', 'Read our privacy policy', Icons.privacy_tip_outlined, () {}),

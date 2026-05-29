@@ -30,6 +30,8 @@ class NativeBridge(
     private val apkSigner = ApkSigner(context)
     private val cloneInstaller = CloneInstaller(context)
     private val splitHandler = SplitApkHandler(context)
+    private val stealthPatcher = StealthPatcher(context)
+    private val deviceSpoofing = DeviceSpoofing(context)
 
     init {
         channel.setMethodCallHandler(this)
@@ -168,6 +170,83 @@ class NativeBridge(
                 }
             }
 
+            "applyStealthPatches" -> {
+                val apkPath = call.argument<String>("apkPath") ?: ""
+                val originalPackage = call.argument<String>("originalPackage") ?: ""
+                val configMap = call.argument<Map<String, Any>>("config") ?: emptyMap()
+
+                Thread {
+                    try {
+                        val config = StealthPatcher.StealthConfig(
+                            spoofSignature = configMap["spoofSignature"] as? Boolean ?: true,
+                            randomizePackageName = configMap["randomizePackageName"] as? Boolean ?: false,
+                            removeDebugFlags = configMap["removeDebugFlags"] as? Boolean ?: true,
+                            patchNativeLibs = configMap["patchNativeLibs"] as? Boolean ?: false,
+                            customPackagePrefix = configMap["customPackagePrefix"] as? String
+                        )
+                        val patchedPath = stealthPatcher.applyStealthPatches(
+                            apkPath, originalPackage, config
+                        ) { status, progress ->
+                            sendProgress(status, progress)
+                        }
+                        mainHandler.post { result.success(patchedPath) }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Stealth patch failed", e)
+                        mainHandler.post { result.error("STEALTH_ERROR", e.message, null) }
+                    }
+                }.start()
+            }
+
+            "generateDeviceProfile" -> {
+                val packageName = call.argument<String>("packageName") ?: ""
+                val cloneIndex = call.argument<Int>("cloneIndex") ?: 1
+
+                try {
+                    val profile = deviceSpoofing.generateProfile(packageName, cloneIndex)
+                    result.success(profile.toMap())
+                } catch (e: Exception) {
+                    result.error("PROFILE_ERROR", e.message, null)
+                }
+            }
+
+            "generateStealthPackageName" -> {
+                val packageName = call.argument<String>("packageName") ?: ""
+                val cloneIndex = call.argument<Int>("cloneIndex") ?: 1
+                val configMap = call.argument<Map<String, Any>>("config") ?: emptyMap()
+
+                try {
+                    val config = StealthPatcher.StealthConfig(
+                        randomizePackageName = configMap["randomizePackageName"] as? Boolean ?: false,
+                        customPackagePrefix = configMap["customPackagePrefix"] as? String
+                    )
+                    val stealthName = stealthPatcher.generateStealthPackageName(
+                        packageName, cloneIndex, config
+                    )
+                    result.success(stealthName)
+                } catch (e: Exception) {
+                    result.error("STEALTH_NAME_ERROR", e.message, null)
+                }
+            }
+
+            "getStealthInfo" -> {
+                val packageName = call.argument<String>("packageName") ?: ""
+                try {
+                    val isInstalled = try {
+                        context.packageManager.getPackageInfo(packageName, 0)
+                        true
+                    } catch (_: Exception) { false }
+
+                    val info = mapOf(
+                        "isInstalled" to isInstalled,
+                        "hasStealthConfig" to true,
+                        "packageName" to packageName
+                    )
+                    result.success(info)
+                } catch (e: Exception) {
+                    result.error("STEALTH_INFO_ERROR", e.message, null)
+                }
+            }
+
             else -> result.notImplemented()
         }
     }
@@ -221,6 +300,20 @@ class NativeBridge(
             newAppName = cloneName
         )
         Log.d(TAG, "Modified APK: $modifiedApk")
+
+        // Step 2.5: Apply stealth patches
+        sendProgress("Applying stealth patches...", 0.50)
+        val stealthConfig = StealthPatcher.StealthConfig(
+            spoofSignature = true,
+            removeDebugFlags = true
+        )
+        stealthPatcher.applyStealthPatches(modifiedApk, packageName, stealthConfig)
+
+        // Step 2.6: Inject device profile
+        sendProgress("Generating device profile...", 0.55)
+        val profile = deviceSpoofing.generateProfile(packageName, cloneIndex)
+        deviceSpoofing.injectProfile(modifiedApk, profile)
+        Log.d(TAG, "Injected device profile for clone $cloneIndex")
 
         // Step 3: Sign
         sendProgress("Signing APK...", 0.65)
