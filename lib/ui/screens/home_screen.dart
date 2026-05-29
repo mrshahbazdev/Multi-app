@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:app_cloner/models/clone_info.dart';
 import 'package:app_cloner/providers/clone_provider.dart';
 import 'package:app_cloner/ui/screens/app_picker_screen.dart';
+import 'package:app_cloner/ui/screens/batch_clone_screen.dart';
 import 'package:app_cloner/ui/screens/settings_screen.dart';
 import 'package:app_cloner/ui/widgets/clone_tile.dart';
 
@@ -16,6 +18,19 @@ class HomeScreen extends ConsumerWidget {
       appBar: AppBar(
         title: const Text('App Cloner'),
         actions: [
+          // Batch clone
+          IconButton(
+            icon: const Icon(Icons.library_add_outlined),
+            tooltip: 'Batch Clone',
+            onPressed: () async {
+              await Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const BatchCloneScreen()),
+              );
+              ref.read(clonesProvider.notifier).refresh();
+            },
+          ),
+          // Settings
           IconButton(
             icon: const Icon(Icons.settings_outlined),
             onPressed: () => Navigator.push(
@@ -25,7 +40,7 @@ class HomeScreen extends ConsumerWidget {
           ),
         ],
       ),
-      body: clones.isEmpty ? _buildEmptyState(context) : _buildClonesList(clones),
+      body: clones.isEmpty ? _buildEmptyState(context) : _buildClonesList(context, clones),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () async {
           await Navigator.push(
@@ -59,7 +74,8 @@ class HomeScreen extends ConsumerWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            'Tap "Clone App" to get started',
+            'Tap "Clone App" to get started\nor use Batch Clone for multiple apps',
+            textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                   color: Colors.white38,
                 ),
@@ -70,16 +86,45 @@ class HomeScreen extends ConsumerWidget {
     );
   }
 
-  Widget _buildClonesList(List<CloneInfo> clones) {
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: clones.length,
-      itemBuilder: (context, index) {
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 12),
-          child: CloneTile(clone: clones[index]),
-        );
-      },
+  Widget _buildClonesList(BuildContext context, List<CloneInfo> clones) {
+    return Column(
+      children: [
+        // Stats bar
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+          child: Row(
+            children: [
+              Text(
+                '${clones.length} Clone${clones.length != 1 ? 's' : ''}',
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.white54,
+                ),
+              ),
+              const Spacer(),
+              Icon(Icons.sort, size: 18, color: Colors.white38),
+              const SizedBox(width: 4),
+              const Text(
+                'Recent first',
+                style: TextStyle(fontSize: 12, color: Colors.white38),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: ListView.builder(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            itemCount: clones.length,
+            itemBuilder: (context, index) {
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: CloneTile(clone: clones[index]),
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 }

@@ -92,4 +92,15 @@ class NativeBridge {
     );
     return result as bool;
   }
+
+  /// Clean up cache/temporary files
+  static Future<void> cleanupCache() async {
+    await _channel.invokeMethod('cleanupCache');
+  }
+
+  /// Get storage info (cache size, etc.)
+  static Future<Map<String, dynamic>> getStorageInfo() async {
+    final result = await _channel.invokeMethod('getStorageInfo');
+    return Map<String, dynamic>.from(result as Map);
+  }
 }

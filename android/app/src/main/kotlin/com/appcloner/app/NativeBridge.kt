@@ -131,15 +131,65 @@ class NativeBridge(
                 }
             }
 
+            "cleanupCache" -> {
+                Thread {
+                    try {
+                        val cacheDir = java.io.File(context.cacheDir, "clone_work")
+                        if (cacheDir.exists()) {
+                            cacheDir.deleteRecursively()
+                        }
+                        android.os.Handler(android.os.Looper.getMainLooper()).post {
+                            result.success(true)
+                        }
+                    } catch (e: Exception) {
+                        android.os.Handler(android.os.Looper.getMainLooper()).post {
+                            result.error("CLEANUP_ERROR", e.message, null)
+                        }
+                    }
+                }.start()
+            }
+
+            "getStorageInfo" -> {
+                try {
+                    val cacheDir = java.io.File(context.cacheDir, "clone_work")
+                    val cacheSize = if (cacheDir.exists()) getDirSize(cacheDir) else 0L
+                    val info = mapOf(
+                        "cacheSizeBytes" to cacheSize,
+                        "cacheSizeFormatted" to formatSize(cacheSize)
+                    )
+                    result.success(info)
+                } catch (e: Exception) {
+                    result.error("STORAGE_ERROR", e.message, null)
+                }
+            }
+
             else -> result.notImplemented()
         }
     }
 
     private fun sendProgress(status: String, progress: Double) {
-        channel.invokeMethod("onCloneProgress", mapOf(
-            "status" to status,
-            "progress" to progress
-        ))
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+            channel.invokeMethod("onCloneProgress", mapOf(
+                "status" to status,
+                "progress" to progress
+            ))
+        }
+    }
+
+    private fun getDirSize(dir: java.io.File): Long {
+        var size = 0L
+        dir.listFiles()?.forEach { file ->
+            size += if (file.isDirectory) getDirSize(file) else file.length()
+        }
+        return size
+    }
+
+    private fun formatSize(bytes: Long): String {
+        return when {
+            bytes < 1024 -> "$bytes B"
+            bytes < 1024 * 1024 -> "${bytes / 1024} KB"
+            else -> "${"%.1f".format(bytes / (1024.0 * 1024.0))} MB"
+        }
     }
 
     companion object {

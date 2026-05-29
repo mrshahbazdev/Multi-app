@@ -17,6 +17,8 @@ class AppConstants {
   static const String methodLaunchApp = 'launchApp';
   static const String methodIsAppInstalled = 'isAppInstalled';
   static const String methodGetApkSize = 'getApkSize';
+  static const String methodCleanupCache = 'cleanupCache';
+  static const String methodGetStorageInfo = 'getStorageInfo';
 
   // Clone status
   static const String statusExtracting = 'extracting';

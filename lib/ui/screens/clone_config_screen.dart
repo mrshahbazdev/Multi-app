@@ -1,8 +1,10 @@
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:app_cloner/models/app_info.dart';
-import 'package:app_cloner/providers/clone_provider.dart';
 import 'package:app_cloner/services/clone_service.dart';
+import 'package:app_cloner/services/icon_service.dart';
 import 'package:app_cloner/ui/screens/cloning_progress_screen.dart';
 
 class CloneConfigScreen extends ConsumerStatefulWidget {
@@ -17,6 +19,9 @@ class CloneConfigScreen extends ConsumerStatefulWidget {
 class _CloneConfigScreenState extends ConsumerState<CloneConfigScreen> {
   late TextEditingController _nameController;
   late int _cloneIndex;
+  Color _selectedColor = IconService.iconColors[0];
+  Uint8List? _customIconBytes;
+  bool _useCustomIcon = false;
 
   @override
   void initState() {
@@ -25,6 +30,7 @@ class _CloneConfigScreenState extends ConsumerState<CloneConfigScreen> {
     _nameController = TextEditingController(
       text: '${widget.appInfo.appName} Clone $_cloneIndex',
     );
+    _selectedColor = IconService.getDefaultColor(_cloneIndex);
   }
 
   @override
@@ -50,7 +56,6 @@ class _CloneConfigScreenState extends ConsumerState<CloneConfigScreen> {
                 padding: const EdgeInsets.all(16),
                 child: Row(
                   children: [
-                    // App icon
                     Container(
                       width: 64,
                       height: 64,
@@ -80,10 +85,7 @@ class _CloneConfigScreenState extends ConsumerState<CloneConfigScreen> {
                           const SizedBox(height: 4),
                           Text(
                             widget.appInfo.packageName,
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: Colors.white38,
-                            ),
+                            style: const TextStyle(fontSize: 12, color: Colors.white38),
                           ),
                           const SizedBox(height: 4),
                           Row(
@@ -149,6 +151,10 @@ class _CloneConfigScreenState extends ConsumerState<CloneConfigScreen> {
                 hintText: 'Enter clone name',
               ),
             ),
+            const SizedBox(height: 24),
+
+            // Icon customization
+            _buildIconSection(),
             const SizedBox(height: 32),
 
             // Clone button
@@ -164,14 +170,14 @@ class _CloneConfigScreenState extends ConsumerState<CloneConfigScreen> {
                     borderRadius: BorderRadius.circular(16),
                   ),
                 ),
-                child: const Row(
+                child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(Icons.copy_all),
-                    SizedBox(width: 8),
+                    const Icon(Icons.copy_all),
+                    const SizedBox(width: 8),
                     Text(
-                      'Start Cloning',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                      widget.appInfo.hasSplitApks ? 'Clone (Split APK)' : 'Start Cloning',
+                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
                     ),
                   ],
                 ),
@@ -181,6 +187,219 @@ class _CloneConfigScreenState extends ConsumerState<CloneConfigScreen> {
         ),
       ),
     );
+  }
+
+  Widget _buildIconSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Clone Icon',
+          style: TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+            color: Colors.white54,
+          ),
+        ),
+        const SizedBox(height: 12),
+
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              children: [
+                // Icon preview
+                Row(
+                  children: [
+                    // Original icon
+                    Column(
+                      children: [
+                        const Text(
+                          'Original',
+                          style: TextStyle(fontSize: 11, color: Colors.white38),
+                        ),
+                        const SizedBox(height: 4),
+                        Container(
+                          width: 56,
+                          height: 56,
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(14),
+                            color: const Color(0xFF2A2A3E),
+                          ),
+                          child: widget.appInfo.iconBytes != null
+                              ? ClipRRect(
+                                  borderRadius: BorderRadius.circular(14),
+                                  child: Image.memory(widget.appInfo.iconBytes!, fit: BoxFit.cover),
+                                )
+                              : const Icon(Icons.android, color: Colors.white38),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(width: 16),
+                    const Icon(Icons.arrow_forward, color: Colors.white38),
+                    const SizedBox(width: 16),
+
+                    // Clone icon preview
+                    Column(
+                      children: [
+                        const Text(
+                          'Clone',
+                          style: TextStyle(fontSize: 11, color: Colors.white38),
+                        ),
+                        const SizedBox(height: 4),
+                        _buildCloneIconPreview(),
+                      ],
+                    ),
+
+                    const Spacer(),
+
+                    // Pick custom icon button
+                    Column(
+                      children: [
+                        OutlinedButton.icon(
+                          onPressed: _pickCustomIcon,
+                          icon: const Icon(Icons.image, size: 18),
+                          label: const Text('Custom', style: TextStyle(fontSize: 12)),
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                          ),
+                        ),
+                        if (_useCustomIcon)
+                          TextButton(
+                            onPressed: () {
+                              setState(() {
+                                _useCustomIcon = false;
+                                _customIconBytes = null;
+                              });
+                            },
+                            child: const Text('Reset', style: TextStyle(fontSize: 11)),
+                          ),
+                      ],
+                    ),
+                  ],
+                ),
+
+                const SizedBox(height: 16),
+                const Divider(height: 1),
+                const SizedBox(height: 16),
+
+                // Color picker
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Badge Color',
+                    style: TextStyle(fontSize: 12, color: Colors.white38),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  height: 36,
+                  child: ListView.builder(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: IconService.iconColors.length,
+                    itemBuilder: (context, index) {
+                      final color = IconService.iconColors[index];
+                      final isSelected = _selectedColor == color;
+                      return GestureDetector(
+                        onTap: () => setState(() => _selectedColor = color),
+                        child: Container(
+                          width: 36,
+                          height: 36,
+                          margin: const EdgeInsets.only(right: 8),
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: color,
+                            border: isSelected
+                                ? Border.all(color: Colors.white, width: 2.5)
+                                : null,
+                          ),
+                          child: isSelected
+                              ? const Icon(Icons.check, size: 18, color: Colors.white)
+                              : null,
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCloneIconPreview() {
+    return Stack(
+      children: [
+        Container(
+          width: 56,
+          height: 56,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            color: const Color(0xFF2A2A3E),
+          ),
+          child: _useCustomIcon && _customIconBytes != null
+              ? ClipRRect(
+                  borderRadius: BorderRadius.circular(14),
+                  child: Image.memory(_customIconBytes!, fit: BoxFit.cover),
+                )
+              : widget.appInfo.iconBytes != null
+                  ? ClipRRect(
+                      borderRadius: BorderRadius.circular(14),
+                      child: ColorFiltered(
+                        colorFilter: ColorFilter.mode(
+                          _selectedColor.withOpacity(0.2),
+                          BlendMode.srcATop,
+                        ),
+                        child: Image.memory(widget.appInfo.iconBytes!, fit: BoxFit.cover),
+                      ),
+                    )
+                  : const Icon(Icons.android, color: Colors.white38),
+        ),
+        // Clone badge
+        Positioned(
+          right: -2,
+          bottom: -2,
+          child: Container(
+            width: 22,
+            height: 22,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: _selectedColor,
+              border: Border.all(color: const Color(0xFF1A1A2E), width: 2),
+            ),
+            child: Center(
+              child: Text(
+                '$_cloneIndex',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _pickCustomIcon() async {
+    final picker = ImagePicker();
+    final image = await picker.pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 512,
+      maxHeight: 512,
+    );
+
+    if (image == null) return;
+
+    final bytes = await image.readAsBytes();
+    setState(() {
+      _customIconBytes = bytes;
+      _useCustomIcon = true;
+    });
   }
 
   Widget _infoChip(String label, {Color? color}) {
