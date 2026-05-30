@@ -299,7 +299,7 @@ class NativeBridge(
             val splitCount = extraction.splitPaths.values.sumOf { it.size }
             sendProgress("Merging $splitCount split APKs...", 0.25)
 
-            val mergedPath = "${apkExtractor.getWorkDir()}/$packageName/merged.apk"
+            val mergedPath = "${apkExtractor.workDir}/$packageName/merged.apk"
             apkToModify = splitHandler.mergeSplitsToSingle(
                 extraction.splitPaths,
                 mergedPath

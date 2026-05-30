@@ -54,7 +54,8 @@ class SplitApkHandler(private val context: Context) {
      */
     fun isSplitApk(packageName: String): Boolean {
         val appInfo = context.packageManager.getApplicationInfo(packageName, 0)
-        return appInfo.splitSourceDirs != null && appInfo.splitSourceDirs.isNotEmpty()
+        val splitDirs = appInfo.splitSourceDirs
+        return splitDirs != null && splitDirs.isNotEmpty()
     }
 
     /**

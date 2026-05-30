@@ -16,7 +16,7 @@ class ApkExtractor(private val context: Context) {
         private const val TAG = "ApkExtractor"
     }
 
-    private val workDir: File
+    val workDir: File
         get() = File(context.filesDir, "clone_work").also { it.mkdirs() }
 
     private val splitHandler = SplitApkHandler(context)
@@ -148,5 +148,4 @@ class ApkExtractor(private val context: Context) {
         workDir.deleteRecursively()
     }
 
-    fun getWorkDir(): File = workDir
 }
