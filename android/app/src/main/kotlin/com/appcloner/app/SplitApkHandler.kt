@@ -183,8 +183,16 @@ class SplitApkHandler(private val context: Context) {
                 if (entry.name.startsWith("META-INF/")) continue
 
                 val newEntry = ZipEntry(entry.name)
+                // Preserve STORED (uncompressed) entries — resources.arsc and
+                // native libs must stay uncompressed/aligned to install on Android 11+.
+                if (entry.method == ZipEntry.STORED) {
+                    newEntry.method = ZipEntry.STORED
+                    newEntry.size = entry.size
+                    newEntry.compressedSize = entry.compressedSize
+                    newEntry.crc = entry.crc
+                }
                 zipOut.putNextEntry(newEntry)
-                zipOut.write(baseZip.getInputStream(entry).readBytes())
+                baseZip.getInputStream(entry).use { it.copyTo(zipOut, 65536) }
                 zipOut.closeEntry()
                 addedEntries.add(entry.name)
             }
@@ -255,8 +263,14 @@ class SplitApkHandler(private val context: Context) {
             }
 
             val newEntry = ZipEntry(entry.name)
+            if (entry.method == ZipEntry.STORED) {
+                newEntry.method = ZipEntry.STORED
+                newEntry.size = entry.size
+                newEntry.compressedSize = entry.compressedSize
+                newEntry.crc = entry.crc
+            }
             zipOut.putNextEntry(newEntry)
-            zipOut.write(splitZip.getInputStream(entry).readBytes())
+            splitZip.getInputStream(entry).use { it.copyTo(zipOut, 65536) }
             zipOut.closeEntry()
             addedEntries.add(entry.name)
         }

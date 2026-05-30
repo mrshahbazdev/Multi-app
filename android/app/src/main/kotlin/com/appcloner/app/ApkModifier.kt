@@ -66,18 +66,15 @@ class ApkModifier(private val context: Context) {
 
                     zipOut.putNextEntry(newEntry)
 
-                    val data = zipIn.getInputStream(entry).readBytes()
-
                     if (entry.name == "AndroidManifest.xml") {
-                        // Modify the binary XML manifest
+                        // Manifest is small; read it fully to patch the binary XML.
+                        val data = zipIn.getInputStream(entry).readBytes()
                         val modified = modifyManifest(data, originalPackage, newPackage, newAppName)
                         zipOut.write(modified)
-                    } else if (entry.name == "resources.arsc" && newAppName != null) {
-                        // Optionally modify app name in resources
-                        // For simplicity, we handle this via manifest string pool
-                        zipOut.write(data)
                     } else {
-                        zipOut.write(data)
+                        // Stream large entries (dex, resources, native libs, assets)
+                        // to keep peak memory low and avoid OutOfMemoryError.
+                        zipIn.getInputStream(entry).use { it.copyTo(zipOut, 65536) }
                     }
 
                     zipOut.closeEntry()
