@@ -84,7 +84,18 @@ class NativeBridge(
                     try {
                         val clonePackage = performClone(packageName, cloneName, cloneIndex)
                         mainHandler.post { result.success(clonePackage) }
-                    } catch (e: Exception) {
+                    } catch (e: OutOfMemoryError) {
+                        // Large apps can exhaust the heap during extract/merge/sign.
+                        // Catch it here so the app surfaces an error instead of crashing.
+                        Log.e(TAG, "Clone ran out of memory for $packageName", e)
+                        mainHandler.post {
+                            result.error(
+                                "CLONE_OOM",
+                                "This app is too large to clone on this device (out of memory).",
+                                null
+                            )
+                        }
+                    } catch (e: Throwable) {
                         Log.e(TAG, "Clone failed for $packageName", e)
                         mainHandler.post { result.error("CLONE_ERROR", e.message, e.stackTraceToString()) }
                     }
@@ -341,8 +352,15 @@ class NativeBridge(
         val signedApk = apkSigner.signApk(modifiedApk)
         Log.d(TAG, "Signed APK: $signedApk")
 
-        // Step 4: Install
+        // Step 4: Install (no root required — uses Android's PackageInstaller).
+        // The user must have granted "install unknown apps" to this app first.
         sendProgress("Installing clone...", 0.85)
+        if (!cloneInstaller.canInstallPackages()) {
+            cloneInstaller.requestInstallPermission()
+            throw IllegalStateException(
+                "Please allow \"Install unknown apps\" for App Cloner, then try again."
+            )
+        }
         cloneInstaller.installApk(signedApk)
 
         sendProgress("Waiting for install confirmation...", 0.95)
