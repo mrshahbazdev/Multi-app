@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:app_cloner/models/app_info.dart';
 import 'package:app_cloner/providers/clone_provider.dart';
+import 'package:app_cloner/services/ad_service.dart';
 import 'package:app_cloner/services/clone_service.dart';
 
 class CloningProgressScreen extends ConsumerStatefulWidget {
@@ -53,6 +54,8 @@ class _CloningProgressScreenState extends ConsumerState<CloningProgressScreen> {
           _progress = 1.0;
         });
         ref.read(clonesProvider.notifier).refresh();
+        // Show an interstitial ad after a successful clone (free users only).
+        await AdService.instance.showInterstitial();
       }
     } catch (e) {
       if (mounted) {

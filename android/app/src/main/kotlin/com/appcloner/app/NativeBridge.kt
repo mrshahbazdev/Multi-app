@@ -32,6 +32,7 @@ class NativeBridge(
     private val splitHandler = SplitApkHandler(context)
     private val stealthPatcher = StealthPatcher(context)
     private val deviceSpoofing = DeviceSpoofing(context)
+    private val gmsHelper = GmsHelper(context)
 
     init {
         channel.setMethodCallHandler(this)
@@ -245,6 +246,26 @@ class NativeBridge(
                 } catch (e: Exception) {
                     result.error("STEALTH_INFO_ERROR", e.message, null)
                 }
+            }
+
+            "getGmsStatus" -> {
+                try {
+                    result.success(gmsHelper.getGmsStatus())
+                } catch (e: Exception) {
+                    result.error("GMS_STATUS_ERROR", e.message, null)
+                }
+            }
+
+            "appUsesGms" -> {
+                val packageName = call.argument<String>("packageName") ?: ""
+                Thread {
+                    try {
+                        val info = gmsHelper.appUsesGms(packageName)
+                        mainHandler.post { result.success(info) }
+                    } catch (e: Exception) {
+                        mainHandler.post { result.error("GMS_USAGE_ERROR", e.message, null) }
+                    }
+                }.start()
             }
 
             else -> result.notImplemented()

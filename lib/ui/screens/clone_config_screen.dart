@@ -4,10 +4,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:app_cloner/models/app_info.dart';
 import 'package:app_cloner/services/clone_service.dart';
+import 'package:app_cloner/services/gms_service.dart';
 import 'package:app_cloner/services/icon_service.dart';
 import 'package:app_cloner/services/native_bridge.dart';
+import 'package:app_cloner/services/premium_service.dart';
 import 'package:app_cloner/services/stealth_service.dart';
 import 'package:app_cloner/ui/screens/cloning_progress_screen.dart';
+import 'package:app_cloner/ui/screens/premium_screen.dart';
 import 'package:app_cloner/ui/screens/stealth_settings_screen.dart';
 
 class CloneConfigScreen extends ConsumerStatefulWidget {
@@ -28,6 +31,7 @@ class _CloneConfigScreenState extends ConsumerState<CloneConfigScreen> {
   SplitApkDetails? _splitDetails;
   bool _loadingSplitInfo = false;
   bool _stealthEnabled = true;
+  GmsUsage? _gmsUsage;
 
   @override
   void initState() {
@@ -40,6 +44,16 @@ class _CloneConfigScreenState extends ConsumerState<CloneConfigScreen> {
 
     if (widget.appInfo.hasSplitApks) {
       _loadSplitInfo();
+    }
+    _loadGmsUsage();
+  }
+
+  Future<void> _loadGmsUsage() async {
+    try {
+      final usage = await GmsService.appUsesGms(widget.appInfo.packageName);
+      if (mounted && usage.usesGms) setState(() => _gmsUsage = usage);
+    } catch (_) {
+      // GMS detection is best-effort; ignore failures.
     }
   }
 
@@ -132,6 +146,12 @@ class _CloneConfigScreenState extends ConsumerState<CloneConfigScreen> {
               ),
             ),
             const SizedBox(height: 16),
+
+            // GMS dependency warning
+            if (_gmsUsage != null) ...[
+              _buildGmsWarningCard(),
+              const SizedBox(height: 16),
+            ],
 
             // Split APK details
             if (widget.appInfo.hasSplitApks) ...[
@@ -658,7 +678,53 @@ class _CloneConfigScreenState extends ConsumerState<CloneConfigScreen> {
     );
   }
 
+  Widget _buildGmsWarningCard() {
+    final reasons = _gmsUsage?.reasons ?? const [];
+    return Card(
+      color: Colors.orange.withOpacity(0.08),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Icon(Icons.cloud_sync, color: Colors.orange, size: 24),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Uses Google Play Services',
+                    style: TextStyle(fontWeight: FontWeight.w600, color: Colors.orange),
+                  ),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'This clone may need a separate Google account for push '
+                    'notifications and login to work correctly.',
+                    style: TextStyle(fontSize: 12, color: Colors.white70),
+                  ),
+                  if (reasons.isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      'Detected: ${reasons.join(', ')}',
+                      style: const TextStyle(fontSize: 11, color: Colors.white38),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _startCloning() {
+    final totalClones = CloneService.getAllClones().length;
+    if (!PremiumService.canCreateClone(totalClones)) {
+      _showFreeLimitDialog();
+      return;
+    }
     Navigator.pushReplacement(
       context,
       MaterialPageRoute(
@@ -666,6 +732,35 @@ class _CloneConfigScreenState extends ConsumerState<CloneConfigScreen> {
           appInfo: widget.appInfo,
           cloneName: _nameController.text,
         ),
+      ),
+    );
+  }
+
+  void _showFreeLimitDialog() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Free limit reached'),
+        content: Text(
+          'Free users can create up to ${PremiumService.freeCloneAllowance} '
+          'clones. Upgrade to Premium for unlimited clones.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Not now'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const PremiumScreen()),
+              );
+            },
+            child: const Text('Go Premium'),
+          ),
+        ],
       ),
     );
   }
