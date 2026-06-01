@@ -33,9 +33,20 @@ class ApkSigner(private val context: Context) {
 
     companion object {
         private const val TAG = "ApkSigner"
-        init {
-            Security.addProvider(BouncyCastleProvider())
-        }
+
+        /**
+         * The full BouncyCastle provider bundled with the app.
+         *
+         * Android ships its own stripped-down provider registered under the name
+         * "BC" that, since Android 9 (P), no longer implements algorithms such as
+         * SHA256withRSA or the BKS keystore. Calling Security.addProvider() does
+         * NOT replace that system provider (the "BC" name is already taken), so
+         * looking the provider up by name returns the broken system one.
+         *
+         * We therefore keep a reference to our own provider instance and pass it
+         * explicitly to every JCA call instead of using the "BC" name.
+         */
+        private val bc: BouncyCastleProvider = BouncyCastleProvider()
     }
 
     private val keystoreFile: File
@@ -55,7 +66,7 @@ class ApkSigner(private val context: Context) {
 
         ensureKeystore()
 
-        val keystore = KeyStore.getInstance("BKS", "BC")
+        val keystore = KeyStore.getInstance("BKS", bc)
         FileInputStream(keystoreFile).use { fis ->
             keystore.load(fis, keystorePassword.toCharArray())
         }
@@ -91,7 +102,7 @@ class ApkSigner(private val context: Context) {
 
         val cert = generateSelfSignedCert(keyPair)
 
-        val keystore = KeyStore.getInstance("BKS", "BC")
+        val keystore = KeyStore.getInstance("BKS", bc)
         keystore.load(null, keystorePassword.toCharArray())
         keystore.setKeyEntry(
             keyAlias,
@@ -124,12 +135,12 @@ class ApkSigner(private val context: Context) {
         )
 
         val contentSigner = JcaContentSignerBuilder("SHA256withRSA")
-            .setProvider("BC")
+            .setProvider(bc)
             .build(keyPair.private)
 
         val certHolder = certBuilder.build(contentSigner)
         return JcaX509CertificateConverter()
-            .setProvider("BC")
+            .setProvider(bc)
             .getCertificate(certHolder)
     }
 }
