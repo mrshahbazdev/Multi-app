@@ -336,12 +336,21 @@ class ApkModifier(private val context: Context) {
             v.startsWith(originalPackage) -> newPackage + v.substring(originalPackage.length)
             else -> null
         }
+        // ContentProvider authorities must be globally unique on the device. A
+        // clone installed alongside the original would otherwise be rejected with
+        // INSTALL_FAILED_CONFLICTING_PROVIDER. So EVERY authority is made unique
+        // to the clone — package-relative ones keep their suffix (so applicationId
+        // -derived lookups still match), and unrelated/hardcoded ones are prefixed
+        // with the clone package.
+        fun uniqueAuthority(part: String): String = when {
+            part.isEmpty() -> part
+            part == originalPackage -> newPackage
+            part.startsWith(originalPackage) -> newPackage + part.substring(originalPackage.length)
+            else -> "$newPackage.$part"
+        }
         fun renameAuthorities(v: String?): String? {
             if (v.isNullOrEmpty()) return null
-            val parts = v.split(";")
-            var changed = false
-            val mapped = parts.map { part -> renamePrefix(part)?.also { changed = true } ?: part }
-            return if (changed) mapped.joinToString(";") else null
+            return v.split(";").joinToString(";") { uniqueAuthority(it) }
         }
 
         var pos = restStart
