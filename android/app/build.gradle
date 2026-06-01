@@ -22,6 +22,18 @@ if (flutterVersionName == null) {
     flutterVersionName = "1.0"
 }
 
+// Release signing config (optional). Provide android/key.properties with
+// storeFile / storePassword / keyAlias / keyPassword to sign release builds.
+// Falls back to the debug signing config when the file is absent (e.g. CI).
+def keystoreProperties = new Properties()
+def keystorePropertiesFile = rootProject.file("key.properties")
+def hasReleaseKeystore = keystorePropertiesFile.exists()
+if (hasReleaseKeystore) {
+    keystorePropertiesFile.withReader("UTF-8") { reader ->
+        keystoreProperties.load(reader)
+    }
+}
+
 android {
     namespace = "com.appcloner.app"
     compileSdk = 34
@@ -45,10 +57,22 @@ android {
         multiDexEnabled true
     }
 
+    signingConfigs {
+        if (hasReleaseKeystore) {
+            release {
+                storeFile file(keystoreProperties["storeFile"])
+                storePassword keystoreProperties["storePassword"]
+                keyAlias keystoreProperties["keyAlias"]
+                keyPassword keystoreProperties["keyPassword"]
+            }
+        }
+    }
+
     buildTypes {
         release {
-            signingConfig = signingConfigs.debug
+            signingConfig = hasReleaseKeystore ? signingConfigs.release : signingConfigs.debug
             minifyEnabled true
+            shrinkResources true
             proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
         }
     }
@@ -63,4 +87,7 @@ dependencies {
     implementation "androidx.core:core-ktx:1.12.0"
     implementation "org.bouncycastle:bcprov-jdk15on:1.70"
     implementation "org.bouncycastle:bcpkix-jdk15on:1.70"
+    // Google's APK signer: produces v1+v2+v3 signatures (no root required),
+    // needed to install cloned APKs on Android 11+.
+    implementation "com.android.tools.build:apksig:8.1.4"
 }

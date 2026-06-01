@@ -3,7 +3,12 @@ class AppConstants {
   static const String clonePrefix = 'com.clone';
   static const String keystorePassword = 'cloner_ks_2024';
   static const String keystoreAlias = 'clone_key';
+
+  // Monetization
   static const int maxFreeClones = 3;
+  static const String settingsBox = 'settings';
+  static const String prefIsPremium = 'is_premium';
+  static const String prefRewardedClones = 'rewarded_clones';
 
   // MethodChannel
   static const String channelName = 'com.appcloner/native';
@@ -22,6 +27,8 @@ class AppConstants {
   static const String methodRequestInstallPermission = 'requestInstallPermission';
   static const String methodCleanupCache = 'cleanupCache';
   static const String methodGetStorageInfo = 'getStorageInfo';
+  static const String methodGetGmsStatus = 'getGmsStatus';
+  static const String methodAppUsesGms = 'appUsesGms';
 
   // Clone status
   static const String statusExtracting = 'extracting';

@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:app_cloner/core/constants.dart';
 import 'package:app_cloner/providers/clone_provider.dart';
+import 'package:app_cloner/providers/premium_provider.dart';
 import 'package:app_cloner/services/backup_service.dart';
 import 'package:app_cloner/services/clone_service.dart';
+import 'package:app_cloner/services/gms_service.dart';
+import 'package:app_cloner/ui/screens/premium_screen.dart';
 import 'package:app_cloner/ui/screens/stealth_settings_screen.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
@@ -17,11 +21,24 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   bool _isClearing = false;
   bool _isExporting = false;
   bool _isImporting = false;
+  GmsStatus _gmsStatus = GmsStatus.unknown;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadGmsStatus();
+  }
+
+  Future<void> _loadGmsStatus() async {
+    final status = await GmsService.getGmsStatus();
+    if (mounted) setState(() => _gmsStatus = status);
+  }
 
   @override
   Widget build(BuildContext context) {
     final clones = ref.watch(clonesProvider);
     final cloneCount = clones.length;
+    final isPremium = ref.watch(premiumProvider).isPremium;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
@@ -30,6 +47,48 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         children: [
           // Stats card
           _buildStatsCard(cloneCount),
+          const SizedBox(height: 16),
+
+          _buildSection('Subscription', [
+            _buildTile(
+              isPremium ? 'Premium' : 'Free Plan',
+              isPremium
+                  ? 'Unlimited clones, no ads, all features'
+                  : '${cloneCount.clamp(0, AppConstants.maxFreeClones)}/${AppConstants.maxFreeClones} free clones used',
+              isPremium ? Icons.workspace_premium : Icons.star_border,
+              () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const PremiumScreen()),
+                );
+              },
+              trailing: isPremium
+                  ? const Icon(Icons.verified, color: Color(0xFFFFB300))
+                  : null,
+            ),
+          ]),
+          const SizedBox(height: 16),
+
+          _buildSection('Google Play Services', [
+            _buildTile(
+              'GMS Status',
+              _gmsStatus.installed
+                  ? '${_gmsStatus.statusText}${_gmsStatus.versionName.isNotEmpty ? ' • v${_gmsStatus.versionName}' : ''}'
+                  : _gmsStatus.statusText,
+              Icons.cloud,
+              null,
+              trailing: Icon(
+                _gmsStatus.available ? Icons.check_circle : Icons.cancel,
+                color: _gmsStatus.available ? Colors.green : Colors.orange,
+              ),
+            ),
+            _buildTile(
+              'Play Store',
+              _gmsStatus.playStoreInstalled ? 'Installed' : 'Not installed',
+              Icons.shop,
+              null,
+            ),
+          ]),
           const SizedBox(height: 16),
 
           _buildSection('Clone Management', [
@@ -116,7 +175,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           const SizedBox(height: 16),
 
           _buildSection('About', [
-            _buildTile('Version', '1.2.0 (Phase 4)', Icons.info_outline, null),
+            _buildTile('Version', '1.3.0 (Phase 5)', Icons.info_outline, null),
             _buildTile('Developer', 'App Cloner Team', Icons.code, null),
             _buildTile('Rate Us', 'Rate on Play Store', Icons.star_outline, () {}),
             _buildTile('Privacy Policy', 'Read our privacy policy', Icons.privacy_tip_outlined, () {}),

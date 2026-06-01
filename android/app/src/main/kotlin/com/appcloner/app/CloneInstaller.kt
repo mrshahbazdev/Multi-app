@@ -11,6 +11,9 @@ import android.util.Log
 import androidx.core.content.FileProvider
 import java.io.File
 import java.io.FileInputStream
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
  * Handles installation and uninstallation of cloned APKs.
@@ -20,6 +23,35 @@ class CloneInstaller(private val context: Context) {
 
     companion object {
         private const val TAG = "CloneInstaller"
+
+        /** Terminal result of a PackageInstaller session (status + message). */
+        data class InstallResult(val status: Int, val message: String?)
+
+        // InstallReceiver delivers the session outcome here so the (background)
+        // clone thread can wait for the real install result instead of assuming
+        // success the moment the session is committed.
+        private val latches = ConcurrentHashMap<Int, CountDownLatch>()
+        private val results = ConcurrentHashMap<Int, InstallResult>()
+
+        fun expect(sessionId: Int) {
+            latches[sessionId] = CountDownLatch(1)
+        }
+
+        fun deliver(sessionId: Int, status: Int, message: String?) {
+            results[sessionId] = InstallResult(status, message)
+            latches[sessionId]?.countDown()
+        }
+
+        /** Block until the session reports a terminal result (or times out). */
+        fun await(sessionId: Int, timeoutMs: Long): InstallResult? {
+            val latch = latches[sessionId] ?: return null
+            return try {
+                if (latch.await(timeoutMs, TimeUnit.MILLISECONDS)) results[sessionId] else null
+            } finally {
+                latches.remove(sessionId)
+                results.remove(sessionId)
+            }
+        }
     }
 
     /**
@@ -157,6 +189,9 @@ class CloneInstaller(private val context: Context) {
 
             onProgress?.invoke("Committing install...", 0.95)
 
+            // Register a latch BEFORE committing so we don't miss a fast result.
+            expect(sessionId)
+
             // Create a pending intent for the install result
             val intent = Intent(context, InstallReceiver::class.java).apply {
                 action = "com.appcloner.INSTALL_RESULT"
@@ -172,12 +207,29 @@ class CloneInstaller(private val context: Context) {
 
             Log.d(TAG, "Committing session $sessionId")
             session.commit(pendingIntent.intentSender)
+            session.close()
 
             onProgress?.invoke("Waiting for user confirmation...", 1.0)
 
+            // Wait for the real outcome (user must tap "Install" in the system
+            // dialog, so allow a generous timeout). Throwing here means a failed
+            // install is reported as a clone error instead of being silently
+            // recorded as a working clone.
+            val result = await(sessionId, 5 * 60 * 1000L)
+                ?: throw IllegalStateException(
+                    "Install timed out. Please confirm the install prompt and try again."
+                )
+
+            if (result.status != PackageInstaller.STATUS_SUCCESS) {
+                throw IllegalStateException(
+                    "Install failed (${result.status}): ${result.message ?: "unknown reason"}"
+                )
+            }
+            Log.d(TAG, "Session $sessionId installed successfully")
+
         } catch (e: Exception) {
             Log.e(TAG, "Install failed, abandoning session $sessionId", e)
-            session.abandon()
+            try { session.abandon() } catch (_: Exception) {}
             throw e
         }
     }

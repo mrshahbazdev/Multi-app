@@ -23,9 +23,13 @@ APK ek ZIP file hai. Hum:
 - [x] Multiple clones per app
 - [x] Clone management (launch, delete)
 - [x] Dark theme UI
-- [ ] Custom app icon
-- [ ] Batch cloning
-- [ ] Clone backup/export
+- [x] Custom app icon
+- [x] Batch cloning (Premium)
+- [x] Clone backup/export
+- [x] Stealth & anti-detection
+- [x] Google Play Services (GMS) awareness
+- [x] Free / Premium tiers + AdMob ads
+- [x] Play Store release preparation
 
 ## Tech Stack
 
@@ -107,9 +111,36 @@ flutter run
 2. **GMS dependent apps** — Cloned apps ko alag Google account chahiye for push notifications
 3. **Split APKs** — Kuch complex App Bundles properly modify nahi hote
 
+## Monetization & Tiers
+
+| Tier | Clones | Ads | Batch clone | Custom icons |
+|------|--------|-----|-------------|--------------|
+| Free | up to 3 | Yes (AdMob) | No | No |
+| Premium | Unlimited | No | Yes | Yes |
+
+Ads use Google's official **test** ad unit IDs (`AdService`) and the AdMob App ID
+in `AndroidManifest.xml` is the Google test ID. Replace both with production IDs
+before release. Premium currently unlocks locally (`PremiumService`); wire
+`in_app_purchase` / Play Billing for production.
+
+## Google Play Services (GMS)
+
+Cloned apps that depend on GMS (push notifications, Google sign-in) generally
+need a separate Google account on the clone. The app detects this (native
+`GmsHelper`) and warns you in the clone configuration screen; device-wide GMS
+status is shown in Settings.
+
+## Release Build
+
+1. Copy `android/key.properties.example` to `android/key.properties` and fill in
+   your keystore details (git-ignored).
+2. `flutter build appbundle --release`
+
+See `store/listing.md` and `PRIVACY_POLICY.md` for store submission assets.
+
 ## Roadmap
 
-See `app-cloner-new-roadmap.md` for full development roadmap.
+See `ROADMAP.md` for full development roadmap.
 
 ## License
 

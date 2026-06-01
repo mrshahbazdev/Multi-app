@@ -142,21 +142,22 @@ class StealthPatcher(private val context: Context) {
 
                     zipOut.putNextEntry(newEntry)
 
-                    val data = zipIn.getInputStream(entry).readBytes()
-
                     when {
                         entry.name == "AndroidManifest.xml" && config.removeDebugFlags -> {
-                            // Remove debuggable flag from manifest
+                            // Remove debuggable flag from manifest (small, read fully)
+                            val data = zipIn.getInputStream(entry).readBytes()
                             val patched = removeDebuggableFlag(data)
                             zipOut.write(patched)
                         }
                         entry.name.endsWith(".dex") && config.patchNativeLibs -> {
-                            // Patch detection strings in DEX
+                            // Patch detection strings in DEX (needs full bytes)
+                            val data = zipIn.getInputStream(entry).readBytes()
                             val patched = patchDexStrings(data, originalPackage)
                             zipOut.write(patched)
                         }
                         else -> {
-                            zipOut.write(data)
+                            // Stream large entries to avoid OutOfMemoryError.
+                            zipIn.getInputStream(entry).use { it.copyTo(zipOut, 65536) }
                         }
                     }
 

@@ -1,17 +1,14 @@
 package com.appcloner.app
 
 import android.content.Context
+import android.util.Log
+import com.android.apksig.ApkSigner as ApkSigTool
 import org.bouncycastle.asn1.x500.X500Name
 import org.bouncycastle.cert.X509v3CertificateBuilder
 import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter
 import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder
-import org.bouncycastle.cms.CMSProcessableByteArray
-import org.bouncycastle.cms.CMSSignedDataGenerator
-import org.bouncycastle.cms.jcajce.JcaSignerInfoGeneratorBuilder
 import org.bouncycastle.jce.provider.BouncyCastleProvider
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder
-import org.bouncycastle.operator.jcajce.JcaDigestCalculatorProviderBuilder
-import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -19,22 +16,37 @@ import java.math.BigInteger
 import java.security.*
 import java.security.cert.X509Certificate
 import java.util.*
-import java.util.jar.Attributes
-import java.util.jar.Manifest
-import java.util.zip.ZipEntry
-import java.util.zip.ZipFile
-import java.util.zip.ZipOutputStream
 
 /**
- * Signs modified APK files using BouncyCastle for certificate generation
- * and JAR signing (v1) for broad compatibility.
+ * Signs modified APK files.
+ *
+ * Uses Google's apksig library to produce APK Signature Scheme v1 + v2 + v3
+ * signatures. v2/v3 are required to install on Android 7+/11+ for apps that
+ * target modern SDK levels — a v1-only ("JAR") signature is rejected by the
+ * package installer on those devices, which is the most common reason a clone
+ * fails to install on a non-rooted phone.
+ *
+ * The signing key/certificate are generated once with BouncyCastle and stored
+ * in an app-private BKS keystore.
  */
 class ApkSigner(private val context: Context) {
 
     companion object {
-        init {
-            Security.addProvider(BouncyCastleProvider())
-        }
+        private const val TAG = "ApkSigner"
+
+        /**
+         * The full BouncyCastle provider bundled with the app.
+         *
+         * Android ships its own stripped-down provider registered under the name
+         * "BC" that, since Android 9 (P), no longer implements algorithms such as
+         * SHA256withRSA or the BKS keystore. Calling Security.addProvider() does
+         * NOT replace that system provider (the "BC" name is already taken), so
+         * looking the provider up by name returns the broken system one.
+         *
+         * We therefore keep a reference to our own provider instance and pass it
+         * explicitly to every JCA call instead of using the "BC" name.
+         */
+        private val bc: BouncyCastleProvider = BouncyCastleProvider()
     }
 
     private val keystoreFile: File
@@ -48,12 +60,22 @@ class ApkSigner(private val context: Context) {
      * Sign an APK file. Returns path to the signed APK.
      */
     fun signApk(apkPath: String): String {
-        val inputFile = File(apkPath)
-        val outputFile = File(inputFile.parent, "signed.apk")
+        // Align uncompressed entries (e.g. resources.arsc, native libs) before
+        // signing. Without this, Android 11+ rejects the install ("App not
+        // installed") and the clone then appears missing on launch. apksig
+        // preserves the alignment we apply here.
+        val src = File(apkPath)
+        val baseName = src.nameWithoutExtension
+        val alignedPath = File(src.parent, "$baseName.aligned.apk").absolutePath
+        ZipAligner.align(apkPath, alignedPath)
+
+        val inputFile = File(alignedPath)
+        val outputFile = File(inputFile.parent, "$baseName.signed.apk")
+        if (outputFile.exists()) outputFile.delete()
 
         ensureKeystore()
 
-        val keystore = KeyStore.getInstance("BKS", "BC")
+        val keystore = KeyStore.getInstance("BKS", bc)
         FileInputStream(keystoreFile).use { fis ->
             keystore.load(fis, keystorePassword.toCharArray())
         }
@@ -61,135 +83,20 @@ class ApkSigner(private val context: Context) {
         val privateKey = keystore.getKey(keyAlias, keyPassword.toCharArray()) as PrivateKey
         val cert = keystore.getCertificateChain(keyAlias)[0] as X509Certificate
 
-        signV1(inputFile, outputFile, privateKey, cert)
-        return outputFile.absolutePath
-    }
-
-    /**
-     * V1 (JAR) signing — creates META-INF/MANIFEST.MF, CERT.SF, CERT.RSA
-     */
-    private fun signV1(
-        inputApk: File,
-        outputApk: File,
-        privateKey: PrivateKey,
-        cert: X509Certificate
-    ) {
-        val manifest = Manifest()
-        manifest.mainAttributes[Attributes.Name.MANIFEST_VERSION] = "1.0"
-        manifest.mainAttributes[Attributes.Name("Created-By")] = "App Cloner"
-
-        val zipFile = ZipFile(inputApk)
-        val entries = zipFile.entries()
-
-        while (entries.hasMoreElements()) {
-            val entry = entries.nextElement()
-            if (entry.name.startsWith("META-INF/")) continue
-            if (entry.isDirectory) continue
-
-            val data = zipFile.getInputStream(entry).readBytes()
-            val digest = MessageDigest.getInstance("SHA-256")
-            val hash = Base64.getEncoder().encodeToString(digest.digest(data))
-
-            val attr = Attributes()
-            attr[Attributes.Name("SHA-256-Digest")] = hash
-            manifest.entries[entry.name] = attr
-        }
-
-        ZipOutputStream(FileOutputStream(outputApk)).use { zipOut ->
-            // Write MANIFEST.MF
-            val manifestBaos = ByteArrayOutputStream()
-            manifest.write(manifestBaos)
-            val manifestData = manifestBaos.toByteArray()
-
-            zipOut.putNextEntry(ZipEntry("META-INF/MANIFEST.MF"))
-            zipOut.write(manifestData)
-            zipOut.closeEntry()
-
-            // Write CERT.SF
-            val sfBytes = createSignatureFile(manifest)
-            zipOut.putNextEntry(ZipEntry("META-INF/CERT.SF"))
-            zipOut.write(sfBytes)
-            zipOut.closeEntry()
-
-            // Write CERT.RSA (PKCS7 signature block)
-            val sigBlock = createSignatureBlock(sfBytes, privateKey, cert)
-            zipOut.putNextEntry(ZipEntry("META-INF/CERT.RSA"))
-            zipOut.write(sigBlock)
-            zipOut.closeEntry()
-
-            // Copy all original entries (except META-INF)
-            val inputZip = ZipFile(inputApk)
-            val inputEntries = inputZip.entries()
-            while (inputEntries.hasMoreElements()) {
-                val entry = inputEntries.nextElement()
-                if (entry.name.startsWith("META-INF/")) continue
-
-                zipOut.putNextEntry(ZipEntry(entry.name))
-                zipOut.write(inputZip.getInputStream(entry).readBytes())
-                zipOut.closeEntry()
-            }
-            inputZip.close()
-        }
-        zipFile.close()
-    }
-
-    /**
-     * Create the .SF (signature file) from the manifest.
-     */
-    private fun createSignatureFile(manifest: Manifest): ByteArray {
-        val manifestBaos = ByteArrayOutputStream()
-        manifest.write(manifestBaos)
-
-        val digest = MessageDigest.getInstance("SHA-256")
-        val mainDigest = Base64.getEncoder().encodeToString(
-            digest.digest(manifestBaos.toByteArray())
-        )
-
-        val sb = StringBuilder()
-        sb.append("Signature-Version: 1.0\r\n")
-        sb.append("Created-By: App Cloner\r\n")
-        sb.append("SHA-256-Digest-Manifest: $mainDigest\r\n")
-        sb.append("\r\n")
-
-        for ((name, _) in manifest.entries) {
-            val entryBlock = "Name: $name\r\n"
-            val entryDigest = Base64.getEncoder().encodeToString(
-                digest.digest(entryBlock.toByteArray())
-            )
-            sb.append("Name: $name\r\n")
-            sb.append("SHA-256-Digest: $entryDigest\r\n")
-            sb.append("\r\n")
-        }
-
-        return sb.toString().toByteArray()
-    }
-
-    /**
-     * Create PKCS7 signature block using BouncyCastle CMS.
-     */
-    private fun createSignatureBlock(
-        sfData: ByteArray,
-        privateKey: PrivateKey,
-        cert: X509Certificate
-    ): ByteArray {
-        val generator = CMSSignedDataGenerator()
-
-        val contentSigner = JcaContentSignerBuilder("SHA256withRSA")
-            .setProvider("BC")
-            .build(privateKey)
-
-        val digestProvider = JcaDigestCalculatorProviderBuilder()
-            .setProvider("BC")
+        val signerConfig = ApkSigTool.SignerConfig.Builder("CERT", privateKey, listOf(cert))
             .build()
 
-        generator.addSignerInfoGenerator(
-            JcaSignerInfoGeneratorBuilder(digestProvider)
-                .build(contentSigner, cert)
-        )
+        ApkSigTool.Builder(listOf(signerConfig))
+            .setInputApk(inputFile)
+            .setOutputApk(outputFile)
+            .setV1SigningEnabled(true)
+            .setV2SigningEnabled(true)
+            .setV3SigningEnabled(true)
+            .build()
+            .sign()
 
-        val content = CMSProcessableByteArray(sfData)
-        val signedData = generator.generate(content, true)
-        return signedData.encoded
+        Log.d(TAG, "Signed APK (v1+v2+v3): ${outputFile.absolutePath} (${outputFile.length() / 1024}KB)")
+        return outputFile.absolutePath
     }
 
     /**
@@ -204,7 +111,7 @@ class ApkSigner(private val context: Context) {
 
         val cert = generateSelfSignedCert(keyPair)
 
-        val keystore = KeyStore.getInstance("BKS", "BC")
+        val keystore = KeyStore.getInstance("BKS", bc)
         keystore.load(null, keystorePassword.toCharArray())
         keystore.setKeyEntry(
             keyAlias,
@@ -237,12 +144,12 @@ class ApkSigner(private val context: Context) {
         )
 
         val contentSigner = JcaContentSignerBuilder("SHA256withRSA")
-            .setProvider("BC")
+            .setProvider(bc)
             .build(keyPair.private)
 
         val certHolder = certBuilder.build(contentSigner)
         return JcaX509CertificateConverter()
-            .setProvider("BC")
+            .setProvider(bc)
             .getCertificate(certHolder)
     }
 }

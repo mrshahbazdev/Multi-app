@@ -137,7 +137,8 @@ class DeviceSpoofing(private val context: Context) {
                     }
 
                     zipOut.putNextEntry(newEntry)
-                    zipOut.write(zipIn.getInputStream(entry).readBytes())
+                    // Stream entries to keep peak memory low (avoid OutOfMemoryError).
+                    zipIn.getInputStream(entry).use { it.copyTo(zipOut, 65536) }
                     zipOut.closeEntry()
                 }
 
