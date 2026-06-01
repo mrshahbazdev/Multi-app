@@ -93,11 +93,16 @@ class ApkModifier(private val context: Context) {
      * An AXML file is a sequence of chunks:
      *   [8-byte file header] [string pool chunk] [resource map] [XML tree chunks]
      *
-     * All string values (the package name, component class names, authorities,
-     * permissions, …) live in the string pool and are referenced elsewhere by
-     * *index*. So to rename the package we only need to rewrite the string pool
-     * with the replacement strings — every other chunk keeps referring to the
-     * same indices and is copied through unchanged.
+     * All string values live in the string pool and are referenced elsewhere by
+     * *index*. Rather than blindly renaming every string that starts with the
+     * old package (which corrupts component class names — they must keep pointing
+     * at the real classes in classes.dex), this editor is attribute-aware: it
+     * walks the XML tree and rewrites only the app *identity* — the <manifest
+     * package>, ContentProvider authorities, the app's own permissions, private
+     * processes and task affinities — while leaving component class names intact
+     * (relative names are expanded to the original package so they still
+     * resolve). New values are appended to the string pool and the relevant
+     * attribute references are repointed at them.
      *
      * This implementation is intentionally defensive: every length/offset read
      * from the file is bounds-checked, so a malformed or unexpected manifest
@@ -156,24 +161,6 @@ class ApkModifier(private val context: Context) {
             rawBytes.add(entry.second)
         }
 
-        // Compute the (possibly) replaced bytes for each string.
-        val newBytes = ArrayList<ByteArray>(stringCount)
-        for (i in 0 until stringCount) {
-            val s = decoded[i]
-            val replacement = when {
-                s == originalPackage -> newPackage
-                s.startsWith("$originalPackage.") -> newPackage + s.substring(originalPackage.length)
-                else -> null
-            }
-            newBytes.add(
-                when {
-                    replacement == null -> rawBytes[i]
-                    isUtf8 -> encodeUtf8Entry(replacement)
-                    else -> encodeUtf16Entry(replacement)
-                }
-            )
-        }
-
         // Style offset array and style data are copied through verbatim.
         val styleOffsetPos = offsetArrayPos + stringCount * 4
         check(styleOffsetPos + styleCount * 4 <= data.size) { "Style offset array out of bounds" }
@@ -183,21 +170,61 @@ class ApkModifier(private val context: Context) {
             data.copyOfRange(spStart + stylesStart, spStart + spSize)
         } else ByteArray(0)
 
-        // Everything after the string pool chunk references strings by index and
-        // is left untouched.
+        // Everything after the string pool chunk: resource map + XML tree. We
+        // edit attribute *values* in place here (by index), so this is mutable.
         val rest = data.copyOfRange(spStart + spSize, data.size)
+        val restStart = spStart + spSize
 
-        // ---- Rebuild the string pool chunk ----
-        val newStringOffsets = IntArray(stringCount)
+        // ---- Parse the resource-map chunk so we can identify framework
+        // attributes (android:name, android:authorities, …) by their resource
+        // id rather than guessing from the string value. ----
+        val resMap = parseResourceMap(rest)
+
+        // ---- Walk the XML tree and decide, per attribute, what (if anything)
+        // its value should become. Component class names are kept pointing at
+        // the ORIGINAL package (so they still resolve to classes.dex); only the
+        // app identity (package, authorities, own permissions, private process,
+        // task affinity) is rewritten to the clone package. ----
+        val edits = collectAttributeEdits(data, restStart, decoded, resMap, originalPackage, newPackage)
+
+        // ---- Assign a string-pool index to every new value: reuse an existing
+        // identical string when possible, otherwise append a new one. ----
+        val existing = HashMap<String, Int>(decoded.size)
+        for (i in decoded.indices) existing.putIfAbsent(decoded[i], i)
+        val appendedIndex = LinkedHashMap<String, Int>()
+        val appendedBytes = ArrayList<ByteArray>()
+        for (e in edits) {
+            if (existing.containsKey(e.value) || appendedIndex.containsKey(e.value)) continue
+            appendedIndex[e.value] = stringCount + appendedIndex.size
+            appendedBytes.add(if (isUtf8) encodeUtf8Entry(e.value) else encodeUtf16Entry(e.value))
+        }
+        fun indexOfValue(v: String): Int = existing[v] ?: appendedIndex.getValue(v)
+
+        // ---- Patch the attribute references inside `rest` (rawValue + typed
+        // data) to point at the new string indices. ----
+        for (e in edits) {
+            val idx = indexOfValue(e.value)
+            val rp = e.attrPos - restStart
+            putIntLE(rest, rp + 8, idx)               // ResValue rawValue (string ref)
+            if (e.valType == 0x03) putIntLE(rest, rp + 16, idx) // typed data when TYPE_STRING
+        }
+
+        // ---- Rebuild the string pool (originals verbatim + appended values). ----
+        val totalCount = stringCount + appendedIndex.size
+        val allBytes = ArrayList<ByteArray>(totalCount)
+        allBytes.addAll(rawBytes)
+        allBytes.addAll(appendedBytes)
+
+        val newStringOffsets = IntArray(totalCount)
         var dataLen = 0
-        for (i in 0 until stringCount) {
+        for (i in 0 until totalCount) {
             newStringOffsets[i] = dataLen
-            dataLen += newBytes[i].size
+            dataLen += allBytes[i].size
         }
         val stringPad = (4 - (dataLen % 4)) % 4
         val paddedDataLen = dataLen + stringPad
 
-        val newStringsStart = spHeaderSize + stringCount * 4 + styleCount * 4
+        val newStringsStart = spHeaderSize + totalCount * 4 + styleCount * 4
         val newStylesStart = if (styleCount > 0) newStringsStart + paddedDataLen else 0
         val newSpSize = newStringsStart + paddedDataLen + styleData.size
 
@@ -215,7 +242,7 @@ class ApkModifier(private val context: Context) {
         out.putShort(spType.toShort())
         out.putShort(spHeaderSize.toShort())
         out.putInt(newSpSize)
-        out.putInt(stringCount)
+        out.putInt(totalCount)
         out.putInt(styleCount)
         out.putInt(flags)
         out.putInt(newStringsStart)
@@ -227,15 +254,155 @@ class ApkModifier(private val context: Context) {
         // Style offset array (verbatim)
         out.put(styleOffsetBytes)
         // String data + 4-byte alignment padding
-        for (b in newBytes) out.put(b)
+        for (b in allBytes) out.put(b)
         repeat(stringPad) { out.put(0) }
         // Style data (verbatim)
         out.put(styleData)
 
-        // Remaining chunks (resource map + XML tree), unchanged
+        // Remaining chunks (resource map + XML tree), with attribute values patched
         out.put(rest)
 
         return out.array()
+    }
+
+    /** A single attribute value to rewrite. [attrPos] is the absolute offset of
+     *  the attribute record in the original AXML; [valType] is its ResValue type. */
+    private data class AttrEdit(val attrPos: Int, val valType: Int, val value: String)
+
+    // Framework attribute resource ids (stable across Android versions).
+    private val RES_NAME = 0x01010003
+    private val RES_TASK_AFFINITY = 0x01010001
+    private val RES_PERMISSION = 0x01010006
+    private val RES_READ_PERMISSION = 0x01010007
+    private val RES_WRITE_PERMISSION = 0x01010008
+    private val RES_PROCESS = 0x01010011
+    private val RES_AUTHORITIES = 0x01010018
+    private val RES_TARGET_PACKAGE = 0x01010021
+    private val RES_TARGET_ACTIVITY = 0x01010202
+
+    private val COMPONENT_ELEMENTS = setOf(
+        "application", "activity", "activity-alias", "service", "receiver", "provider"
+    )
+
+    /** Parse the resource-map chunk (type 0x0180) that follows the string pool.
+     *  Returns resId per string index (0 where unknown / not a framework attr). */
+    private fun parseResourceMap(rest: ByteArray): IntArray {
+        val rb = ByteBuffer.wrap(rest).order(ByteOrder.LITTLE_ENDIAN)
+        var p = 0
+        while (p + 8 <= rest.size) {
+            val type = rb.getShort(p).toInt() and 0xFFFF
+            val hsize = rb.getShort(p + 2).toInt() and 0xFFFF
+            val size = rb.getInt(p + 4)
+            if (size < 8 || p + size > rest.size) break
+            when (type) {
+                0x0180 -> {
+                    val count = (size - hsize) / 4
+                    return IntArray(count) { rb.getInt(p + hsize + it * 4) }
+                }
+                0x0102 -> return IntArray(0) // XML tree started, no resource map
+            }
+            p += size
+        }
+        return IntArray(0)
+    }
+
+    /** Walk START_ELEMENT chunks and decide which attribute values to rewrite. */
+    private fun collectAttributeEdits(
+        data: ByteArray,
+        restStart: Int,
+        decoded: List<String>,
+        resMap: IntArray,
+        originalPackage: String,
+        newPackage: String
+    ): List<AttrEdit> {
+        val bb = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+        val edits = ArrayList<AttrEdit>()
+
+        fun classExpand(v: String?): String? = when {
+            v.isNullOrEmpty() -> null
+            v[0] == '.' -> originalPackage + v                 // ".Main" -> orig.Main
+            v.indexOf('.') < 0 -> "$originalPackage.$v"        // "Main"  -> orig.Main
+            else -> null                                        // absolute -> keep (real dex class)
+        }
+        fun renamePrefix(v: String?): String? = when {
+            v == null -> null
+            v == originalPackage -> newPackage
+            v.startsWith("$originalPackage.") -> newPackage + v.substring(originalPackage.length)
+            else -> null
+        }
+        fun renameProcess(v: String?): String? = when {
+            v.isNullOrEmpty() || v[0] == ':' -> null            // ":remote" already private
+            v == originalPackage -> newPackage
+            v.startsWith(originalPackage) -> newPackage + v.substring(originalPackage.length)
+            else -> null
+        }
+        fun renameAuthorities(v: String?): String? {
+            if (v.isNullOrEmpty()) return null
+            val parts = v.split(";")
+            var changed = false
+            val mapped = parts.map { part -> renamePrefix(part)?.also { changed = true } ?: part }
+            return if (changed) mapped.joinToString(";") else null
+        }
+
+        var pos = restStart
+        while (pos + 8 <= data.size) {
+            val type = bb.getShort(pos).toInt() and 0xFFFF
+            val size = bb.getInt(pos + 4)
+            if (size < 8 || pos + size > data.size) break
+            if (type == 0x0102) { // RES_XML_START_ELEMENT_TYPE
+                val nameIdx = bb.getInt(pos + 16 + 4)
+                val attrStart = bb.getShort(pos + 16 + 8).toInt() and 0xFFFF
+                val attrSize = bb.getShort(pos + 16 + 10).toInt() and 0xFFFF
+                val attrCount = bb.getShort(pos + 16 + 12).toInt() and 0xFFFF
+                val element = decoded.getOrElse(nameIdx) { "" }
+                val attrsBase = pos + 16 + attrStart
+                for (i in 0 until attrCount) {
+                    val ap = attrsBase + i * attrSize
+                    if (ap + 20 > data.size) break
+                    val aNs = bb.getInt(ap)
+                    val aName = bb.getInt(ap + 4)
+                    val valType = bb.get(ap + 15).toInt() and 0xFF
+                    val valData = bb.getInt(ap + 16)
+                    val resId = if (aName in resMap.indices) resMap[aName] else 0
+                    val aNameStr = decoded.getOrElse(aName) { "" }
+                    val cur = if (valType == 0x03 && valData in decoded.indices) decoded[valData] else null
+
+                    val nv: String? = when {
+                        element == "manifest" && aNs < 0 && aNameStr == "package" -> newPackage
+                        element in COMPONENT_ELEMENTS -> when (resId) {
+                            RES_NAME -> classExpand(cur)
+                            RES_AUTHORITIES -> renameAuthorities(cur)
+                            RES_PERMISSION, RES_READ_PERMISSION, RES_WRITE_PERMISSION -> renamePrefix(cur)
+                            RES_PROCESS -> renameProcess(cur)
+                            RES_TASK_AFFINITY -> renamePrefix(cur)
+                            RES_TARGET_ACTIVITY -> if (element == "activity-alias") classExpand(cur) else null
+                            else -> null
+                        }
+                        element == "permission" || element == "permission-group" || element == "permission-tree" ->
+                            if (resId == RES_NAME) renamePrefix(cur) else null
+                        element == "uses-permission" || element == "uses-permission-sdk-23" ->
+                            if (resId == RES_NAME) renamePrefix(cur) else null
+                        element == "instrumentation" -> when (resId) {
+                            RES_TARGET_PACKAGE -> newPackage
+                            RES_NAME -> classExpand(cur)
+                            else -> null
+                        }
+                        else -> null
+                    }
+
+                    if (nv != null && nv != cur) edits.add(AttrEdit(ap, valType, nv))
+                }
+            }
+            pos += size
+        }
+        return edits
+    }
+
+    private fun putIntLE(a: ByteArray, p: Int, v: Int) {
+        a[p] = (v and 0xFF).toByte()
+        a[p + 1] = ((v shr 8) and 0xFF).toByte()
+        a[p + 2] = ((v shr 16) and 0xFF).toByte()
+        a[p + 3] = ((v shr 24) and 0xFF).toByte()
     }
 
     /**
