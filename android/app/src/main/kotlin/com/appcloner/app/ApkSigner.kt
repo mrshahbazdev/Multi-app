@@ -64,11 +64,13 @@ class ApkSigner(private val context: Context) {
         // signing. Without this, Android 11+ rejects the install ("App not
         // installed") and the clone then appears missing on launch. apksig
         // preserves the alignment we apply here.
-        val alignedPath = File(File(apkPath).parent, "aligned.apk").absolutePath
+        val src = File(apkPath)
+        val baseName = src.nameWithoutExtension
+        val alignedPath = File(src.parent, "$baseName.aligned.apk").absolutePath
         ZipAligner.align(apkPath, alignedPath)
 
         val inputFile = File(alignedPath)
-        val outputFile = File(inputFile.parent, "signed.apk")
+        val outputFile = File(inputFile.parent, "$baseName.signed.apk")
         if (outputFile.exists()) outputFile.delete()
 
         ensureKeystore()

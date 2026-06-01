@@ -38,7 +38,9 @@ class ApkModifier(private val context: Context) {
         newAppName: String? = null
     ): String {
         val sourceApk = File(apkPath)
-        val outputApk = File(sourceApk.parent, "modified.apk")
+        // Unique per-input name so processing multiple splits in the same
+        // working directory does not overwrite each other.
+        val outputApk = File(sourceApk.parent, "${sourceApk.nameWithoutExtension}.modified.apk")
 
         ZipFile(sourceApk).use { zipIn ->
             ZipOutputStream(FileOutputStream(outputApk)).use { zipOut ->

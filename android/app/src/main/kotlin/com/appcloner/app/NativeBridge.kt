@@ -7,6 +7,7 @@ import android.util.Log
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import java.io.File
 
 /**
  * Main bridge between Flutter and native Android code.
@@ -303,67 +304,90 @@ class NativeBridge(
             sendProgress(status, 0.05 + progress * 0.20)
         }
 
-        val apkToModify: String
-
-        if (isSplit) {
-            // Step 1.5: Merge split APKs into a single APK
-            val splitCount = extraction.splitPaths.values.sumOf { it.size }
-            sendProgress("Merging $splitCount split APKs...", 0.25)
-
-            val mergedPath = "${apkExtractor.workDir}/$packageName/merged.apk"
-            apkToModify = splitHandler.mergeSplitsToSingle(
-                extraction.splitPaths,
-                mergedPath
-            ) { status, progress ->
-                sendProgress(status, 0.25 + progress * 0.15)
-            }
-
-            Log.d(TAG, "Merged ${splitCount} splits into single APK: $apkToModify")
-        } else {
-            apkToModify = extraction.basePath
-        }
-
-        // Step 2: Modify package name
-        sendProgress("Modifying package name...", 0.45)
-        val modifiedApk = apkModifier.modifyApk(
-            apkPath = apkToModify,
-            originalPackage = packageName,
-            newPackage = clonePackage,
-            newAppName = cloneName
-        )
-        Log.d(TAG, "Modified APK: $modifiedApk")
-
-        // Step 2.5: Apply stealth patches
-        sendProgress("Applying stealth patches...", 0.50)
-        val stealthConfig = StealthPatcher.StealthConfig(
-            spoofSignature = true,
-            removeDebugFlags = true
-        )
-        stealthPatcher.applyStealthPatches(modifiedApk, packageName, stealthConfig)
-
-        // Step 2.6: Inject device profile
-        sendProgress("Generating device profile...", 0.55)
-        val profile = deviceSpoofing.generateProfile(packageName, cloneIndex)
-        deviceSpoofing.injectProfile(modifiedApk, profile)
-        Log.d(TAG, "Injected device profile for clone $cloneIndex")
-
-        // Step 3: Sign
-        sendProgress("Signing APK...", 0.65)
-        val signedApk = apkSigner.signApk(modifiedApk)
-        Log.d(TAG, "Signed APK: $signedApk")
-
-        // Step 4: Install (no root required — uses Android's PackageInstaller).
-        // The user must have granted "install unknown apps" to this app first.
-        sendProgress("Installing clone...", 0.85)
+        // Ensure we can install before doing expensive work.
         if (!cloneInstaller.canInstallPackages()) {
             cloneInstaller.requestInstallPermission()
             throw IllegalStateException(
                 "Please allow \"Install unknown apps\" for App Cloner, then try again."
             )
         }
-        cloneInstaller.installApk(signedApk)
 
-        sendProgress("Waiting for install confirmation...", 0.95)
+        val stealthConfig = StealthPatcher.StealthConfig(
+            spoofSignature = true,
+            removeDebugFlags = true
+        )
+        val profile = deviceSpoofing.generateProfile(packageName, cloneIndex)
+
+        if (isSplit) {
+            // For split (App Bundle) apps we do NOT merge into a single APK.
+            // A merged base still declares it requires config splits, so the
+            // installer rejects it with INSTALL_FAILED_MISSING_SPLIT ("App not
+            // installed"). Instead we rename + sign every split and install them
+            // together in one PackageInstaller session — every required split is
+            // present, so the install succeeds.
+            val splitFiles = LinkedHashMap<String, String>() // splitName -> path
+            // Base first.
+            val basePaths = extraction.splitPaths[SplitApkHandler.SplitType.BASE]
+                ?: throw IllegalStateException("No base APK found for $packageName")
+            splitFiles["base.apk"] = basePaths.first()
+            extraction.splitPaths.forEach { (type, paths) ->
+                if (type == SplitApkHandler.SplitType.BASE) return@forEach
+                paths.forEach { p -> splitFiles[File(p).name] = p }
+            }
+
+            val signedSplits = ArrayList<String>(splitFiles.size)
+            var idx = 0
+            for ((name, path) in splitFiles) {
+                idx++
+                sendProgress("Modifying split $idx/${splitFiles.size}...", 0.30 + 0.40 * idx / splitFiles.size)
+
+                val apk = apkModifier.modifyApk(
+                    apkPath = path,
+                    originalPackage = packageName,
+                    newPackage = clonePackage,
+                    newAppName = cloneName
+                )
+
+                // Stealth + device profile only need to touch the base split.
+                if (name == "base.apk") {
+                    stealthPatcher.applyStealthPatches(apk, packageName, stealthConfig)
+                    deviceSpoofing.injectProfile(apk, profile)
+                }
+
+                signedSplits.add(apkSigner.signApk(apk))
+            }
+
+            sendProgress("Installing clone (${signedSplits.size} splits)...", 0.85)
+            cloneInstaller.installSplitApks(signedSplits) { status, progress ->
+                sendProgress(status, 0.85 + progress * 0.1)
+            }
+        } else {
+            // Step 2: Modify package name
+            sendProgress("Modifying package name...", 0.45)
+            val modifiedApk = apkModifier.modifyApk(
+                apkPath = extraction.basePath,
+                originalPackage = packageName,
+                newPackage = clonePackage,
+                newAppName = cloneName
+            )
+
+            // Step 2.5: Apply stealth patches + device profile
+            sendProgress("Applying stealth patches...", 0.50)
+            stealthPatcher.applyStealthPatches(modifiedApk, packageName, stealthConfig)
+            sendProgress("Generating device profile...", 0.55)
+            deviceSpoofing.injectProfile(modifiedApk, profile)
+
+            // Step 3: Sign (aligns first, then v1+v2+v3)
+            sendProgress("Signing APK...", 0.65)
+            val signedApk = apkSigner.signApk(modifiedApk)
+
+            // Step 4: Install (no root — Android PackageInstaller). Blocks until
+            // the real result so a failed install is reported as an error.
+            sendProgress("Installing clone...", 0.85)
+            cloneInstaller.installApk(signedApk)
+        }
+
+        sendProgress("Clone installed", 1.0)
 
         // Cleanup temp files
         Thread {

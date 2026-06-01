@@ -15,10 +15,11 @@ class InstallReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, -1)
         val message = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
+        val sessionId = intent.getIntExtra("session_id", -1)
 
         when (status) {
             PackageInstaller.STATUS_PENDING_USER_ACTION -> {
-                // User needs to confirm install
+                // User needs to confirm install (not a terminal state).
                 val confirmIntent = intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
                 if (confirmIntent != null) {
                     confirmIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -26,18 +27,14 @@ class InstallReceiver : BroadcastReceiver() {
                 }
             }
             PackageInstaller.STATUS_SUCCESS -> {
-                Log.d(TAG, "Clone installed successfully")
-                Toast.makeText(context, "Clone installed!", Toast.LENGTH_SHORT).show()
+                Log.d(TAG, "Clone installed successfully (session $sessionId)")
+                if (sessionId != -1) CloneInstaller.deliver(sessionId, status, message)
             }
-            PackageInstaller.STATUS_FAILURE,
-            PackageInstaller.STATUS_FAILURE_ABORTED,
-            PackageInstaller.STATUS_FAILURE_BLOCKED,
-            PackageInstaller.STATUS_FAILURE_CONFLICT,
-            PackageInstaller.STATUS_FAILURE_INCOMPATIBLE,
-            PackageInstaller.STATUS_FAILURE_INVALID,
-            PackageInstaller.STATUS_FAILURE_STORAGE -> {
-                Log.e(TAG, "Install failed: status=$status, message=$message")
+            else -> {
+                // Any other status is a terminal failure.
+                Log.e(TAG, "Install failed: status=$status, message=$message (session $sessionId)")
                 Toast.makeText(context, "Install failed: $message", Toast.LENGTH_LONG).show()
+                if (sessionId != -1) CloneInstaller.deliver(sessionId, status, message)
             }
         }
     }
