@@ -60,7 +60,14 @@ class ApkSigner(private val context: Context) {
      * Sign an APK file. Returns path to the signed APK.
      */
     fun signApk(apkPath: String): String {
-        val inputFile = File(apkPath)
+        // Align uncompressed entries (e.g. resources.arsc, native libs) before
+        // signing. Without this, Android 11+ rejects the install ("App not
+        // installed") and the clone then appears missing on launch. apksig
+        // preserves the alignment we apply here.
+        val alignedPath = File(File(apkPath).parent, "aligned.apk").absolutePath
+        ZipAligner.align(apkPath, alignedPath)
+
+        val inputFile = File(alignedPath)
         val outputFile = File(inputFile.parent, "signed.apk")
         if (outputFile.exists()) outputFile.delete()
 
