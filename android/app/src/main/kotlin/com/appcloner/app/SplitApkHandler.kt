@@ -54,7 +54,8 @@ class SplitApkHandler(private val context: Context) {
      */
     fun isSplitApk(packageName: String): Boolean {
         val appInfo = context.packageManager.getApplicationInfo(packageName, 0)
-        return appInfo.splitSourceDirs != null && appInfo.splitSourceDirs.isNotEmpty()
+        val splitDirs = appInfo.splitSourceDirs
+        return splitDirs != null && splitDirs.isNotEmpty()
     }
 
     /**
@@ -182,6 +183,12 @@ class SplitApkHandler(private val context: Context) {
                 if (entry.name.startsWith("META-INF/")) continue
 
                 val newEntry = ZipEntry(entry.name)
+                if (entry.method == ZipEntry.STORED || entry.name.endsWith(".so")) {
+                    newEntry.method = ZipEntry.STORED
+                    newEntry.size = entry.size
+                    newEntry.compressedSize = entry.size
+                    newEntry.crc = entry.crc
+                }
                 zipOut.putNextEntry(newEntry)
                 zipOut.write(baseZip.getInputStream(entry).readBytes())
                 zipOut.closeEntry()
@@ -254,6 +261,12 @@ class SplitApkHandler(private val context: Context) {
             }
 
             val newEntry = ZipEntry(entry.name)
+            if (entry.method == ZipEntry.STORED || entry.name.endsWith(".so")) {
+                newEntry.method = ZipEntry.STORED
+                newEntry.size = entry.size
+                newEntry.compressedSize = entry.size
+                newEntry.crc = entry.crc
+            }
             zipOut.putNextEntry(newEntry)
             zipOut.write(splitZip.getInputStream(entry).readBytes())
             zipOut.closeEntry()

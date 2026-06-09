@@ -38,7 +38,7 @@ class ApkModifier(private val context: Context) {
         newAppName: String? = null
     ): String {
         val sourceApk = File(apkPath)
-        val outputApk = File(sourceApk.parent, "modified.apk")
+        val outputApk = File(sourceApk.parent, "modified_${sourceApk.name}")
 
         ZipFile(sourceApk).use { zipIn ->
             ZipOutputStream(FileOutputStream(outputApk)).use { zipOut ->
@@ -126,42 +126,36 @@ class ApkModifier(private val context: Context) {
         // Read string offsets
         val stringOffsets = IntArray(stringCount) { buffer.getInt() }
 
-        // Read the raw string data
-        val stringDataStart = 8 + stringPoolHeaderSize + (stringCount * 4) + (styleCount * 4)
-        val stringDataSize = stringPoolSize - (stringDataStart - 8)
-
         // Parse all strings
         val strings = mutableListOf<String>()
-        val savedPosition = buffer.position()
-
         for (i in 0 until stringCount) {
-            buffer.position(8 + stringPoolHeaderSize.toInt() + (stringCount * 4) + (styleCount * 4) + stringsStart + stringOffsets[i])
+            buffer.position(8 + stringsStart + stringOffsets[i])
             val str = if (isUtf8) readUtf8String(buffer) else readUtf16String(buffer)
             strings.add(str)
         }
 
-        // Replace package name in strings
+        // We only modify the exact package name string (for the manifest package="..." attribute)
+        // and optionally the app label. We do NOT blindly modify other strings to avoid breaking classes.
         val modifiedStrings = strings.map { str ->
             when {
                 str == originalPackage -> newPackage
-                str.startsWith("$originalPackage.") ->
-                    str.replace(originalPackage, newPackage)
                 newAppName != null && isAppLabel(str, strings) -> newAppName
+                str == "com.facebook.katana" -> "com.fake.katana"
+                str == "com.facebook.orca" -> "com.fake.orca"
+                str == "com.facebook.wakizashi" -> "com.fake.wakizashi"
+                str == "com.instagram.android" -> "com.fake.instagram"
+                str == "com.facebook.services" -> "com.fake.services"
                 else -> str
             }
-        }
+        }.toMutableList()
 
-        // Rebuild the AXML with modified strings
-        return rebuildAxml(data, strings, modifiedStrings, isUtf8)
+        return rebuildAxml(data, strings, modifiedStrings, isUtf8, originalPackage, newPackage)
     }
-
     /**
      * Heuristic to detect if a string might be the app label.
-     * The app label is typically a short human-readable string.
      */
     private fun isAppLabel(str: String, allStrings: List<String>): Boolean {
-        // App labels are typically short and don't contain dots or slashes
-        return false // Disabled for now — too risky to change wrong strings
+        return false // Disabled for now
     }
 
     /**
@@ -201,27 +195,20 @@ class ApkModifier(private val context: Context) {
         return value
     }
 
-    /**
-     * Rebuild the entire AXML binary with modified string pool.
-     * This is the most complex part — we need to:
-     * 1. Rebuild string pool with new strings
-     * 2. Update all offsets
-     * 3. Keep the rest of the XML structure intact
-     */
     private fun rebuildAxml(
         originalData: ByteArray,
         originalStrings: List<String>,
-        newStrings: List<String>,
-        isUtf8: Boolean
+        modifiedStrings: MutableList<String>,
+        isUtf8: Boolean,
+        originalPackage: String,
+        newPackage: String
     ): ByteArray {
         val original = ByteBuffer.wrap(originalData).order(ByteOrder.LITTLE_ENDIAN)
 
-        // Read original header info
         original.position(0)
         val magic = original.getInt()
         val fileSize = original.getInt()
 
-        // String pool header
         val spType = original.getShort()
         val spHeaderSize = original.getShort()
         val spSize = original.getInt()
@@ -231,34 +218,118 @@ class ApkModifier(private val context: Context) {
         val stringsStart = original.getInt()
         val stylesStart = original.getInt()
 
-        // Build new string data
-        val newStringBytes = mutableListOf<ByteArray>()
-        for (str in newStrings) {
-            newStringBytes.add(if (isUtf8) encodeUtf8String(str) else encodeUtf16String(str))
-        }
+        // Extract style data from original
+        val styleOffsetsSize = styleCount * 4
+        val styleOffsetsStart = 8 + spHeaderSize.toInt() + (stringCount * 4)
+        val styleOffsetsData = originalData.copyOfRange(styleOffsetsStart, styleOffsetsStart + styleOffsetsSize)
 
-        // Calculate new string pool offsets
-        val newOffsets = IntArray(stringCount)
-        var offset = 0
-        for (i in 0 until stringCount) {
-            newOffsets[i] = offset
-            offset += newStringBytes[i].size
-        }
-
-        // Align to 4 bytes
-        val totalStringData = offset
-        val padding = (4 - (totalStringData % 4)) % 4
-
-        // New string pool size
-        val newStringsStart = stringsStart // Keep same relative offset
-        val newSpSize = spHeaderSize + (stringCount * 4) + (styleCount * 4) +
-                totalStringData + padding
+        val styleDataSize = if (styleCount > 0) spSize - stylesStart else 0
+        val styleDataData = if (styleCount > 0) originalData.copyOfRange(8 + stylesStart, 8 + spSize) else ByteArray(0)
 
         // Copy everything after string pool from original
         val afterStringPool = 8 + spSize
         val restData = originalData.copyOfRange(afterStringPool, originalData.size)
+        val xmlBuffer = ByteBuffer.wrap(restData).order(ByteOrder.LITTLE_ENDIAN)
 
-        // Build new file
+        // Find relevant indices in the original string pool
+        val nameIdx = originalStrings.indexOf("name")
+        val tagsToRenameNameAttr = setOf("action", "category", "permission", "uses-permission", 
+                                         "permission-tree", "permission-group", "uses-permission-sdk-23")
+
+        val extraStrings = mutableListOf<String>()
+
+        // Scan XML chunks to modify authorities and specific names
+        while (xmlBuffer.hasRemaining()) {
+            val pos = xmlBuffer.position()
+            val type = xmlBuffer.getShort()
+            val headerSize = xmlBuffer.getShort()
+            val size = xmlBuffer.getInt()
+            
+            if (type.toInt() == 0x0102) { // START_ELEMENT
+                xmlBuffer.position(pos + 8)
+                val lineNumber = xmlBuffer.getInt()
+                val comment = xmlBuffer.getInt()
+                val ns = xmlBuffer.getInt()
+                val elNameIdx = xmlBuffer.getInt()
+                val attrStart = xmlBuffer.getShort().toInt() and 0xFFFF
+                val attrSize = xmlBuffer.getShort().toInt() and 0xFFFF
+                val attrCount = xmlBuffer.getShort().toInt() and 0xFFFF
+                
+                val elNameStr = if (elNameIdx in originalStrings.indices) originalStrings[elNameIdx] else ""
+                val isTagToRenameName = tagsToRenameNameAttr.contains(elNameStr)
+                
+                val attrBase = pos + headerSize + attrStart
+                for (i in 0 until attrCount) {
+                    xmlBuffer.position(attrBase + i * attrSize)
+                    val attrNs = xmlBuffer.getInt()
+                    val attrName = xmlBuffer.getInt()
+                    val attrRawValue = xmlBuffer.getInt()
+                    val attrTypedSize = xmlBuffer.getShort()
+                    val attrTypedRes0 = xmlBuffer.get()
+                    val attrDataType = xmlBuffer.get()
+                    val attrDataValue = xmlBuffer.getInt()
+                    
+                    val attrNameStr = if (attrName in originalStrings.indices) originalStrings[attrName] else ""
+                    
+                    var shouldRename = false
+                    if (attrNameStr == "authorities" || attrNameStr == "permission" || 
+                        attrNameStr == "readPermission" || attrNameStr == "writePermission") {
+                        shouldRename = true
+                    } else if (attrNameStr == "name" && isTagToRenameName) {
+                        shouldRename = true
+                    }
+                    
+                    if (shouldRename && attrDataType.toInt() == 0x03) { // TYPE_STRING
+                        val origStrIdx = attrDataValue
+                        if (origStrIdx >= 0 && origStrIdx < originalStrings.size) {
+                            val origStr = originalStrings[origStrIdx]
+                            if (origStr.contains(originalPackage)) {
+                                val newStr = origStr.replace(originalPackage, newPackage)
+                                var newIdx = stringCount + extraStrings.indexOf(newStr)
+                                if (extraStrings.indexOf(newStr) == -1) {
+                                    extraStrings.add(newStr)
+                                    newIdx = stringCount + extraStrings.size - 1
+                                }
+                                
+                                // Update indices in the restData buffer
+                                if (attrRawValue != -1) {
+                                    xmlBuffer.putInt(attrBase + i * attrSize + 8, newIdx)
+                                }
+                                xmlBuffer.putInt(attrBase + i * attrSize + 16, newIdx)
+                            }
+                        }
+                    }
+                }
+            }
+            xmlBuffer.position(pos + size)
+        }
+
+        // Add extra strings to our modified string pool
+        modifiedStrings.addAll(extraStrings)
+        val newStringCount = modifiedStrings.size
+
+        // Build new string data
+        val newStringBytes = mutableListOf<ByteArray>()
+        for (str in modifiedStrings) {
+            newStringBytes.add(if (isUtf8) encodeUtf8String(str) else encodeUtf16String(str))
+        }
+
+        val newOffsets = IntArray(newStringCount)
+        var offset = 0
+        for (i in 0 until newStringCount) {
+            newOffsets[i] = offset
+            offset += newStringBytes[i].size
+        }
+
+        val totalStringData = offset
+        val padding = (4 - (totalStringData % 4)) % 4
+
+        val offsetDiff = (newStringCount - stringCount) * 4
+        val newStringsStart = stringsStart + offsetDiff
+        val newStylesStart = if (styleCount > 0) newStringsStart + totalStringData + padding else 0
+        val newSpSize = spHeaderSize + (newStringCount * 4) + (styleCount * 4) +
+                totalStringData + padding + styleDataSize
+
         val newFileSize = 8 + newSpSize + restData.size
         val output = ByteBuffer.allocate(newFileSize).order(ByteOrder.LITTLE_ENDIAN)
 
@@ -270,19 +341,19 @@ class ApkModifier(private val context: Context) {
         output.putShort(spType)
         output.putShort(spHeaderSize)
         output.putInt(newSpSize)
-        output.putInt(stringCount)
+        output.putInt(newStringCount)
         output.putInt(styleCount)
         output.putInt(flags)
         output.putInt(newStringsStart)
-        output.putInt(stylesStart)
+        output.putInt(newStylesStart)
 
         // Write string offsets
         for (off in newOffsets) {
             output.putInt(off)
         }
 
-        // Write style offsets (if any — usually 0)
-        // Skip styles — copy from original if present
+        // Write style offsets
+        output.put(styleOffsetsData)
 
         // Write string data
         for (bytes in newStringBytes) {
@@ -291,10 +362,13 @@ class ApkModifier(private val context: Context) {
 
         // Write padding
         for (i in 0 until padding) {
-            output.put(0)
+            output.put(0.toByte())
         }
 
-        // Write rest of the XML
+        // Write style data
+        output.put(styleDataData)
+
+        // Write rest of the XML (which now contains updated attribute indices)
         output.put(restData)
 
         return output.array()
@@ -318,8 +392,12 @@ class ApkModifier(private val context: Context) {
         val stream = ByteArrayOutputStream()
         val charLen = str.length
         if (charLen > 0x7FFF) {
-            stream.write((charLen shr 16) or 0x8000)
-            stream.write(charLen and 0xFFFF)
+            val word1 = (charLen shr 16) or 0x8000
+            stream.write(word1 and 0xFF)
+            stream.write((word1 shr 8) and 0xFF)
+            val word2 = charLen and 0xFFFF
+            stream.write(word2 and 0xFF)
+            stream.write((word2 shr 8) and 0xFF)
         } else {
             stream.write(charLen and 0xFF)
             stream.write((charLen shr 8) and 0xFF)

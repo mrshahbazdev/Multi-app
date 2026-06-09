@@ -145,10 +145,10 @@ class StealthPatcher(private val context: Context) {
                     val data = zipIn.getInputStream(entry).readBytes()
 
                     when {
-                        entry.name == "AndroidManifest.xml" && config.removeDebugFlags -> {
-                            // Remove debuggable flag from manifest
-                            val patched = removeDebuggableFlag(data)
-                            zipOut.write(patched)
+                        entry.name == "AndroidManifest.xml" -> {
+                            // Manifest is already patched safely via string pool in ApkModifier
+                            // Just write the data
+                            zipOut.write(data)
                         }
                         entry.name.endsWith(".dex") && config.patchNativeLibs -> {
                             // Patch detection strings in DEX
@@ -191,40 +191,7 @@ class StealthPatcher(private val context: Context) {
         return sourceApk.absolutePath
     }
 
-    /**
-     * Remove android:debuggable="true" from binary manifest.
-     * This is a simple byte scan for the debuggable attribute resource ID.
-     */
-    private fun removeDebuggableFlag(manifestData: ByteArray): ByteArray {
-        // android:debuggable resource ID is 0x0101000f
-        val debuggableResId = byteArrayOf(0x0f, 0x00, 0x01, 0x01)
-        val result = manifestData.copyOf()
 
-        // Scan for debuggable attribute and set value to 0 (false)
-        for (i in 0 until result.size - 20) {
-            if (result[i] == debuggableResId[0] &&
-                result[i + 1] == debuggableResId[1] &&
-                result[i + 2] == debuggableResId[2] &&
-                result[i + 3] == debuggableResId[3]
-            ) {
-                // The value is typically 8 bytes after the resource ID in AXML
-                // Format: resId(4) + ns(4) + name(4) + valueStr(4) + type(2) + res(1) + dataType(1) + data(4)
-                // We need to set the data (int value) to 0
-                val valueOffset = i + 16 // offset to the actual value
-                if (valueOffset + 4 <= result.size) {
-                    // Set to 0 (false)
-                    result[valueOffset] = 0
-                    result[valueOffset + 1] = 0
-                    result[valueOffset + 2] = 0
-                    result[valueOffset + 3] = 0
-                    Log.d(TAG, "Removed debuggable flag at offset $i")
-                }
-                break
-            }
-        }
-
-        return result
-    }
 
     /**
      * Patch detection strings in DEX files.

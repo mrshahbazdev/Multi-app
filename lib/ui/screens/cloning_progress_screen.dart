@@ -74,9 +74,10 @@ class _CloningProgressScreenState extends ConsumerState<CloningProgressScreen> {
       ),
       body: WillPopScope(
         onWillPop: () async => _isComplete || _hasError,
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               // Status icon
@@ -198,6 +199,7 @@ class _CloningProgressScreenState extends ConsumerState<CloningProgressScreen> {
             ],
           ),
         ),
+      ),
       ),
     );
   }

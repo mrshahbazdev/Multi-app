@@ -29,7 +29,14 @@ class CloneInstaller(private val context: Context) {
         val file = File(apkPath)
         if (!file.exists()) throw IllegalArgumentException("APK file not found: $apkPath")
         Log.d(TAG, "Installing single APK: $apkPath (${file.length() / 1024}KB)")
-        installWithPackageInstaller(listOf(file))
+        
+        try {
+            // Use the modern PackageInstaller Session API instead of ACTION_VIEW.
+            // This bypasses strict OEM verifiers (like Vivo iManager) that hook into ACTION_VIEW.
+            installWithPackageInstaller(listOf(file))
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start install intent", e)
+        }
     }
 
     /**

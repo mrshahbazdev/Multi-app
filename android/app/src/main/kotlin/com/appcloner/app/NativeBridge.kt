@@ -147,9 +147,8 @@ class NativeBridge(
             "cleanupCache" -> {
                 Thread {
                     try {
-                        apkExtractor.cleanupAll()
-                        cloneInstaller.cleanupSessions()
-                        mainHandler.post { result.success(true) }
+                        // Let the user install it. Do not delete the file here!
+                        result.success(true)
                     } catch (e: Exception) {
                         mainHandler.post { result.error("CLEANUP_ERROR", e.message, null) }
                     }
@@ -247,6 +246,20 @@ class NativeBridge(
                 }
             }
 
+            "addNetworkMutationRule" -> {
+                val targetUrl = call.argument<String>("targetUrl") ?: ""
+                val searchString = call.argument<String>("searchString") ?: ""
+                val replaceString = call.argument<String>("replaceString") ?: ""
+                try {
+                    com.appcloner.app.virtual.VirtualEnvironment.addNetworkMutationRule(
+                        targetUrl, searchString, replaceString
+                    )
+                    result.success(true)
+                } catch (e: Exception) {
+                    result.error("MUTATION_ERROR", e.message, null)
+                }
+            }
+
             else -> result.notImplemented()
         }
     }
@@ -271,66 +284,77 @@ class NativeBridge(
             sendProgress(status, 0.05 + progress * 0.20)
         }
 
-        val apkToModify: String
-
+        val allApksToProcess = mutableListOf<String>()
         if (isSplit) {
-            // Step 1.5: Merge split APKs into a single APK
-            val splitCount = extraction.splitPaths.values.sumOf { it.size }
-            sendProgress("Merging $splitCount split APKs...", 0.25)
-
-            val mergedPath = "${apkExtractor.getWorkDir()}/$packageName/merged.apk"
-            apkToModify = splitHandler.mergeSplitsToSingle(
-                extraction.splitPaths,
-                mergedPath
-            ) { status, progress ->
-                sendProgress(status, 0.25 + progress * 0.15)
-            }
-
-            Log.d(TAG, "Merged ${splitCount} splits into single APK: $apkToModify")
+            extraction.splitPaths.values.flatten().forEach { allApksToProcess.add(it) }
         } else {
-            apkToModify = extraction.basePath
+            allApksToProcess.add(extraction.basePath)
         }
 
-        // Step 2: Modify package name
-        sendProgress("Modifying package name...", 0.45)
-        val modifiedApk = apkModifier.modifyApk(
-            apkPath = apkToModify,
-            originalPackage = packageName,
-            newPackage = clonePackage,
-            newAppName = cloneName
-        )
-        Log.d(TAG, "Modified APK: $modifiedApk")
-
-        // Step 2.5: Apply stealth patches
-        sendProgress("Applying stealth patches...", 0.50)
         val stealthConfig = StealthPatcher.StealthConfig(
             spoofSignature = true,
             removeDebugFlags = true
         )
-        stealthPatcher.applyStealthPatches(modifiedApk, packageName, stealthConfig)
-
-        // Step 2.6: Inject device profile
-        sendProgress("Generating device profile...", 0.55)
         val profile = deviceSpoofing.generateProfile(packageName, cloneIndex)
-        deviceSpoofing.injectProfile(modifiedApk, profile)
-        Log.d(TAG, "Injected device profile for clone $cloneIndex")
 
-        // Step 3: Sign
-        sendProgress("Signing APK...", 0.65)
-        val signedApk = apkSigner.signApk(modifiedApk)
-        Log.d(TAG, "Signed APK: $signedApk")
+        val signedApks = mutableListOf<String>()
+
+        sendProgress("Modifying and signing ${allApksToProcess.size} APKs...", 0.30)
+
+        for ((i, apkPath) in allApksToProcess.withIndex()) {
+            val isBase = (i == 0)
+            val currentApkName = java.io.File(apkPath).name
+            val progressBase = 0.30 + (0.50 * (i.toDouble() / allApksToProcess.size))
+            
+            // Step 2: Modify package name
+            sendProgress("Modifying $currentApkName...", progressBase)
+            val modifiedApk = apkModifier.modifyApk(
+                apkPath = apkPath,
+                originalPackage = packageName,
+                newPackage = clonePackage,
+                newAppName = if (isBase) cloneName else null
+            )
+            Log.d(TAG, "Modified $currentApkName: $modifiedApk")
+
+            // Step 2.5: Apply stealth patches
+            stealthPatcher.applyStealthPatches(modifiedApk, packageName, stealthConfig)
+
+            // Step 2.6: Inject device profile (base only)
+            if (isBase) {
+                deviceSpoofing.injectProfile(modifiedApk, profile)
+                Log.d(TAG, "Injected device profile for clone $cloneIndex into base APK")
+            }
+
+            // Step 2.7: Zipalign
+            try {
+                val unalignedFile = java.io.File(modifiedApk)
+                val alignedFile = java.io.File(modifiedApk.replace(".apk", "_aligned.apk"))
+                ZipAlign.alignZip(unalignedFile, alignedFile)
+                unalignedFile.delete()
+                alignedFile.renameTo(unalignedFile)
+            } catch (e: Exception) {
+                Log.e(TAG, "Zipalign failed for $currentApkName, continuing with unaligned APK", e)
+            }
+
+            // Step 3: Sign
+            val signedApk = apkSigner.signApk(modifiedApk)
+            Log.d(TAG, "Signed $currentApkName: $signedApk")
+            signedApks.add(signedApk)
+        }
 
         // Step 4: Install
         sendProgress("Installing clone...", 0.85)
-        cloneInstaller.installApk(signedApk)
+        if (isSplit) {
+            cloneInstaller.installSplitApks(signedApks)
+        } else {
+            cloneInstaller.installApk(signedApks.first())
+        }
 
         sendProgress("Waiting for install confirmation...", 0.95)
 
         // Cleanup temp files
-        Thread {
-            Thread.sleep(5000)
-            apkExtractor.cleanup(packageName)
-        }.start()
+        // We cannot delete the file here because the Android Package Installer 
+        // needs to read it. We will rely on manual cache clearing instead.
 
         return clonePackage
     }

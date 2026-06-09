@@ -33,6 +33,12 @@
             </intent-filter>
         </activity>
 
+        <!-- Virtual Machine Stub Activities -->
+        <activity
+            android:name=".virtual.StubActivity"
+            android:exported="true"
+            android:theme="@style/LaunchTheme" />
+
         <!-- Install result receiver -->
         <receiver
             android:name=".InstallReceiver"

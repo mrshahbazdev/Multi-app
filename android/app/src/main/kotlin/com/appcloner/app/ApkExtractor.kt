@@ -16,7 +16,7 @@ class ApkExtractor(private val context: Context) {
         private const val TAG = "ApkExtractor"
     }
 
-    private val workDir: File
+    private val internalWorkDir: File
         get() = File(context.filesDir, "clone_work").also { it.mkdirs() }
 
     private val splitHandler = SplitApkHandler(context)
@@ -55,7 +55,7 @@ class ApkExtractor(private val context: Context) {
         val appInfo = context.packageManager.getApplicationInfo(packageName, 0)
         val sourceApk = File(appInfo.sourceDir)
 
-        val outputDir = File(workDir, packageName).also {
+        val outputDir = File(internalWorkDir, packageName).also {
             it.deleteRecursively()
             it.mkdirs()
         }
@@ -91,7 +91,7 @@ class ApkExtractor(private val context: Context) {
 
         onProgress?.invoke("Extracting ${splitInfo.size} split APKs...", 0.1)
 
-        val splitPaths = splitHandler.extractAllSplits(packageName, workDir)
+        val splitPaths = splitHandler.extractAllSplits(packageName, internalWorkDir)
 
         // Find the base APK path
         val basePath = splitPaths[SplitApkHandler.SplitType.BASE]?.firstOrNull()
@@ -141,12 +141,12 @@ class ApkExtractor(private val context: Context) {
     }
 
     fun cleanup(packageName: String) {
-        File(workDir, packageName).deleteRecursively()
+        File(internalWorkDir, packageName).deleteRecursively()
     }
 
     fun cleanupAll() {
-        workDir.deleteRecursively()
+        internalWorkDir.deleteRecursively()
     }
 
-    fun getWorkDir(): File = workDir
+    fun getWorkDir(): File = internalWorkDir
 }
